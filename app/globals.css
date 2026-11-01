@@ -1,0 +1,75 @@
+@import "tailwindcss";
+
+/* YouTube dark palette */
+:root {
+  --bg: #0f0f0f;
+  --surface: #181818;
+  --raised: #212121;
+  --chip: #272727;
+  --hover: #3f3f3f;
+  --line: rgba(255, 255, 255, 0.1);
+  --fg: #f1f1f1;
+  --muted: #aaaaaa;
+  --accent: #ff0000;
+  --accent-hover: #cc0000;
+  --link: #3ea6ff;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-raised: var(--raised);
+  --color-chip: var(--chip);
+  --color-hover: var(--hover);
+  --color-line: var(--line);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-link: var(--link);
+  --font-sans: var(--font-roboto), Roboto, Arial, sans-serif;
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-roboto), Roboto, Arial, sans-serif;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #555 transparent;
+}
+
+input[type="range"] {
+  accent-color: var(--accent);
+}
+
+input[type="color"] {
+  -webkit-appearance: none;
+  appearance: none;
+  border: none;
+  padding: 0;
+  background: none;
+}
+input[type="color"]::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+input[type="color"]::-webkit-color-swatch {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+/* Animation preset thumbnails */
+@keyframes kb-in { from { transform: scale(1); } to { transform: scale(1.35); } }
+@keyframes kb-out { from { transform: scale(1.35); } to { transform: scale(1); } }
+@keyframes tr-dissolve { 0%, 30% { opacity: 0; } 70%, 100% { opacity: 1; } }
+@keyframes tr-left { 0%, 20% { transform: translateX(100%); } 80%, 100% { transform: translateX(0); } }
+@keyframes tr-right { 0%, 20% { transform: translateX(-100%); } 80%, 100% { transform: translateX(0); } }
+.preset:hover .anim-zoom-in { animation: kb-in 1.6s ease-in-out infinite alternate; }
+.preset:hover .anim-zoom-out { animation: kb-out 1.6s ease-in-out infinite alternate; }
+.preset:hover .anim-dissolve { animation: tr-dissolve 1.6s ease-in-out infinite alternate; }
+.preset:hover .anim-slide-left { animation: tr-left 1.6s ease-in-out infinite alternate; }
+.preset:hover .anim-slide-right { animation: tr-right 1.6s ease-in-out infinite alternate; }
