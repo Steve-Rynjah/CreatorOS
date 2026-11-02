@@ -1,5 +1,5 @@
 import "server-only";
-import type { ScriptPart, ScriptShot } from "@/lib/script";
+import type { ScriptChapter, ScriptPart, ScriptShot } from "@/lib/script";
 
 /**
  * Reads a video script (text pulled from a PDF) into parts and shots.
@@ -31,6 +31,12 @@ const SHOT_RE = /^[\s#*_>-]*\[?\s*shot\s*#?\s*(\d+)\s*\]?\s*(?:[\[(–—-]\s*([
 const SHOT_RANGE_RE = /^\s*shots?\s*\d+\s*[–—-]\s*\d+\s*$/i;
 /** An upper-case label: "NARRATION:", "ON-SCREEN TEXT:", "VISUAL (B-ROLL): text". */
 const LABEL_RE = /^[\s#*_>-]*([A-Z][A-Z0-9 &/\-]{1,30}?)(?:\s*\([^)]*\))?[\s*_]*:[\s*_]*(.*)$/;
+
+/** "YouTube chapters" / "Chapters:" heading, followed by "0:25 Part 1: Before the Billions" lines. */
+const CHAPTERS_HEAD_RE = /^[\s#*_>-]*(?:youtube\s+)?chapters\s*:?[\s*_]*$/i;
+const CHAPTER_LINE_RE = /^[\s*_-]*(\d{1,2}:\d{2}(?::\d{2})?)\s*[–—-]?\s*(.+?)\s*$/;
+/** "Part 1: Before the Billions" inside a chapter line. */
+const CHAPTER_PART_RE = /^part\s*(\d+)\s*[a-z]?\s*[:.\-–—]\s*(.+)$/i;
 
 type Field = "narration" | "visual" | "motion" | "onScreen" | null;
 
@@ -64,6 +70,8 @@ export function parseScript(source: string): ScriptPart[] {
   let shot: Draft | null = null;
   let field: Field = null;
   let autoN = 0;
+  let inChapters = false;
+  const chapters: { part: string | null; title: string }[] = [];
 
   const openBucket = (key: string, title: string) => {
     let b = buckets.find((x) => x.key === key);
@@ -78,6 +86,21 @@ export function parseScript(source: string): ScriptPart[] {
   for (const raw of lines) {
     const line = raw.trim();
     if (!line) continue;
+
+    if (CHAPTERS_HEAD_RE.test(line)) {
+      inChapters = true;
+      field = null;
+      continue;
+    }
+    if (inChapters) {
+      const c = line.match(CHAPTER_LINE_RE);
+      if (c) {
+        const pm = c[2].match(CHAPTER_PART_RE);
+        chapters.push(pm ? { part: String(Number(pm[1])), title: pm[2].trim() } : { part: null, title: c[2].trim() });
+        continue;
+      }
+      inChapters = false;
+    }
 
     const part = line.match(PART_RE);
     if (part && isPartHeading(part)) {
@@ -115,7 +138,7 @@ export function parseScript(source: string): ScriptPart[] {
     if (field && shot) shot.lines[field].push(line);
   }
 
-  return buckets
+  const parts = buckets
     .map((b) => ({
       key: b.key,
       title: b.title,
@@ -124,6 +147,25 @@ export function parseScript(source: string): ScriptPart[] {
       shots: b.shots.map(finish).filter((x) => x.narration),
     }))
     .filter((b) => b.shots.length > 0);
+  return attachChapters(parts, chapters);
+}
+
+/**
+ * Gives every part its title card. "Part N: …" chapters go to part N; unnumbered
+ * ones (the hook, "The $20 Billion Mystery") go, in order, to the parts without a
+ * number. Parts no chapter names fall back to their own heading.
+ */
+function attachChapters(parts: ScriptPart[], chapters: { part: string | null; title: string }[]): ScriptPart[] {
+  const loose = chapters.filter((c) => !c.part);
+  return parts.map((p) => {
+    let chapter: ScriptChapter | null = null;
+    const numbered = /^\d+$/.test(p.key);
+    const hit = numbered ? chapters.find((c) => c.part === p.key) : null;
+    if (hit) chapter = { label: p.title, title: hit.title };
+    else if (!numbered && loose.length) chapter = { label: null, title: loose.shift()!.title };
+    else if (p.name) chapter = { label: p.title, title: p.name };
+    return { ...p, chapter };
+  });
 }
 
 function finish(d: Draft): ScriptShot {

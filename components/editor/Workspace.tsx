@@ -98,6 +98,9 @@ export function Workspace({ assets }: { assets: Assets }) {
         if (s.kind === "cue")
           updateProject((proj) => ({ ...proj, cues: proj.cues.filter((c) => !s.ids.includes(c.id)) }));
         if (s.kind === "text" || s.kind === "cue") selectionStore.set({ kind: null, ids: [] });
+      } else if (e.key === "Home") {
+        e.preventDefault();
+        player.seek(0);
       } else if (e.key === "Escape") {
         selectionStore.set({ kind: null, ids: [] });
       }
@@ -115,15 +118,20 @@ export function Workspace({ assets }: { assets: Assets }) {
   return (
     <div className="h-full flex flex-col">
       {/* Project bar */}
-      <div className="shrink-0 flex flex-wrap items-center gap-x-5 gap-y-2 px-4 py-2 border-b border-line">
-        <div className="min-w-0">
-          <div className="text-sm font-medium truncate max-w-[260px]" title={p.imagesDir}>
-            {folder}
+      <div className="shrink-0 flex flex-wrap items-center gap-x-5 gap-y-2 px-4 py-2.5 border-b border-line bg-surface">
+        <div className="flex items-center gap-3 min-w-0">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent">
+            <svg width="12" height="14" viewBox="0 0 10 12" fill="#ffffff" aria-hidden>
+              <path d="M1 0.6l8.4 5.4L1 11.4z" />
+            </svg>
+          </span>
+          <div className="min-w-0">
+          <div className="text-sm font-semibold truncate max-w-[320px]" title={p.imagesDir}>
+            {p.chapter ? `${p.chapter.label ? `${p.chapter.label} · ` : ""}${p.chapter.title}` : folder}
           </div>
           {p.script ? (
             <div className="text-xs text-muted tabular-nums">
-              {p.script.part} · {p.images.length} images timed to {p.script.shots} shots · voice {p.script.voice} ·{" "}
-              {formatTime(p.audioDuration)}
+              {p.images.length} shots · voice {p.script.voice} · {formatTime(p.audioDuration, false)}
             </div>
           ) : (
           <div className="text-xs text-muted tabular-nums">
@@ -132,6 +140,7 @@ export function Workspace({ assets }: { assets: Assets }) {
               <span className="text-fg font-medium">{formatTime(offset)}</span>
             </div>
           )}
+          </div>
         </div>
 
         {!p.script && (
@@ -198,31 +207,36 @@ export function Workspace({ assets }: { assets: Assets }) {
           />
         </div>
 
-        <div className="ml-auto flex items-center gap-1">
-          <Button variant="ghost" size="sm" onClick={undo} title="Undo (⌘Z)">
-            Undo
+        <div className="ml-auto flex items-center gap-1.5">
+          <BarIcon label="Undo (⌘Z)" onClick={undo}>
+            <path d="M9 14L4 9l5-5" />
+            <path d="M4 9h10.5a5.5 5.5 0 010 11H11" />
+          </BarIcon>
+          <BarIcon label="Redo (⇧⌘Z)" onClick={redo}>
+            <path d="M15 14l5-5-5-5" />
+            <path d="M20 9H9.5a5.5 5.5 0 000 11H13" />
+          </BarIcon>
+          <Button variant="primary" onClick={() => setExporting(true)} className="ml-1.5 rounded-xl">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M12 4v11m0 0l-4-4m4 4l4-4M5 19h14" />
+            </svg>
+            Export
           </Button>
-          <Button variant="ghost" size="sm" onClick={redo} title="Redo (⇧⌘Z)">
-            Redo
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
+          <span className="mx-1.5 h-6 w-px bg-line-strong" />
+          <BarIcon
+            label="Close the editor"
             onClick={() => {
               player.pause();
               loadProject(null);
             }}
           >
-            Change folders
-          </Button>
-          <Button variant="primary" onClick={() => setExporting(true)} className="ml-2">
-            Export
-          </Button>
+            <path d="M6 6l12 12M18 6L6 18" />
+          </BarIcon>
         </div>
       </div>
 
       {(tooLong || p.warnings.length > 0) && (
-        <div className="shrink-0 px-4 py-1.5 text-xs bg-[#f9a825]/10 text-[#f9d27a] border-b border-line">
+        <div className="shrink-0 px-4 py-1.5 text-xs bg-warning/10 text-warning border-b border-line">
           {tooLong &&
             `Images (${formatTime(imgTotal, false)}) are longer than the voice-over (${formatTime(p.audioDuration, false)}) — the video will run past the narration. `}
           {p.warnings.join(" ")}
@@ -276,5 +290,21 @@ export function Workspace({ assets }: { assets: Assets }) {
       <Timeline height={layout.timelineH} />
       {exporting && <ExportDialog assets={assets} onClose={() => setExporting(false)} />}
     </div>
+  );
+}
+
+function BarIcon({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+      className="w-9 h-9 rounded-lg grid place-items-center text-muted hover:text-fg hover:bg-chip transition-colors"
+    >
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        {children}
+      </svg>
+    </button>
   );
 }

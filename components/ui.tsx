@@ -10,15 +10,15 @@ export function Button({
   ...rest
 }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; size?: "sm" | "md" | "lg" }) {
   const v = {
-    primary: "bg-accent hover:bg-accent-hover text-white",
-    secondary: "bg-chip hover:bg-hover text-fg",
+    primary: "bg-accent hover:bg-accent-hover text-white shadow-[0_1px_2px_rgba(16,24,40,0.05)]",
+    secondary: "bg-chip hover:bg-hover text-fg border border-line-strong",
     ghost: "hover:bg-chip text-fg",
-    danger: "hover:bg-accent/15 text-[#ff4e45]",
+    danger: "hover:bg-error/15 text-error",
   }[variant];
   const s = { sm: "h-7 px-2.5 text-xs", md: "h-9 px-4 text-sm", lg: "h-11 px-6 text-base" }[size];
   return (
     <button
-      className={`${v} ${s} rounded-full font-medium inline-flex items-center justify-center gap-1.5 transition-colors disabled:opacity-40 disabled:pointer-events-none ${className}`}
+      className={`${v} ${s} rounded-lg font-medium inline-flex items-center justify-center gap-1.5 transition-colors disabled:opacity-40 disabled:pointer-events-none ${className}`}
       {...rest}
     />
   );
@@ -34,7 +34,7 @@ export function Label({ children, hint }: { children: ReactNode; hint?: ReactNod
 }
 
 export const inputCls =
-  "w-full h-9 px-3 rounded-lg bg-bg border border-line text-sm text-fg placeholder:text-[#717171] focus:outline-none focus:border-link";
+  "w-full h-9 px-3 rounded-lg bg-bg border border-line-strong text-sm text-fg placeholder:text-subtle focus:outline-none focus:border-link";
 
 /** Text field for a local folder path, with a native “Browse…” picker on macOS. */
 export function PathField({
@@ -90,7 +90,7 @@ export function Toggle({ checked, onChange, label }: { checked: boolean; onChang
         role="switch"
         aria-checked={checked}
         onClick={() => onChange(!checked)}
-        className={`relative w-9 h-5 rounded-full transition-colors ${checked ? "bg-link" : "bg-hover"}`}
+        className={`relative w-9 h-5 rounded-full transition-colors ${checked ? "bg-accent" : "bg-hover"}`}
       >
         <span
           className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
@@ -141,9 +141,9 @@ export function ProgressBar({ value }: { value: number }) {
 export function Alert({ tone = "info", children }: { tone?: "info" | "warn" | "error" | "ok"; children: ReactNode }) {
   const t = {
     info: "border-link/30 bg-link/10",
-    warn: "border-[#f9a825]/30 bg-[#f9a825]/10",
-    error: "border-accent/40 bg-accent/10",
-    ok: "border-[#2ba640]/40 bg-[#2ba640]/10",
+    warn: "border-warning/30 bg-warning/10",
+    error: "border-error/40 bg-error/10",
+    ok: "border-success/40 bg-success/10",
   }[tone];
   return <div className={`text-sm rounded-lg border px-3 py-2 ${t}`}>{children}</div>;
 }

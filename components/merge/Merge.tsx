@@ -122,7 +122,7 @@ export function Merge() {
                             type="checkbox"
                             checked={on}
                             onChange={() => setExcluded((x) => (on ? [...x, p.name] : x.filter((n) => n !== p.name)))}
-                            className="accent-[#ff0000]"
+                            className="accent-[var(--accent)]"
                           />
                         </td>
                         <td className="py-2.5 font-medium">{p.name}</td>

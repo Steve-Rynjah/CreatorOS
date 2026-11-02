@@ -24,12 +24,17 @@ export type ScriptPart = {
   name: string | null;
   timing: string | null;
   shots: ScriptShot[];
+  /** Title card for this part, from the script's "YouTube chapters" list (or the part heading). */
+  chapter?: ScriptChapter | null;
 };
+
+/** "Part 1" + "Before the Billions"; label is null for an unnumbered chapter like the hook. */
+export type ScriptChapter = { label: string | null; title: string };
 
 export type ParsedScript = { file: string; pages: number; parts: ScriptPart[] };
 
 export type NarratedShot = { n: number; start: number; end: number };
-export type NarrationCue = { start: number; end: number; text: string };
+export type NarrationCue = { start: number; end: number; text: string; words?: number[] };
 
 /** One part spoken: a single WAV plus where every shot and every subtitle line falls in it. */
 export type Narration = {
@@ -37,6 +42,8 @@ export type Narration = {
   duration: number;
   shots: NarratedShot[];
   cues: NarrationCue[];
+  /** Spoken chapter title before the first shot: 0 → `end` (the first shot starts at `end`). */
+  intro?: { end: number };
 };
 
 export const VOICES = [
@@ -63,4 +70,15 @@ export const isSpeed = (v: unknown): v is SpeedId => SPEEDS.some((x) => x.id ===
 /** The text that is actually spoken / shown as subtitles: script lines joined into prose. */
 export function spokenText(narration: string) {
   return narration.replace(/\s+/g, " ").trim();
+}
+
+/** The part's title card: the parsed chapter, else its own heading name. */
+export function chapterOf(part: ScriptPart): ScriptChapter | null {
+  if (part.chapter !== undefined) return part.chapter;
+  return part.name ? { label: part.title, title: part.name } : null;
+}
+
+/** What the voice says over the title card. */
+export function chapterSpeech(c: ScriptChapter) {
+  return c.label ? `${c.label}. ${c.title}.` : `${c.title}.`;
 }

@@ -209,7 +209,7 @@ export function Timeline({ height }: { height: number }) {
     <div className="relative shrink-0 bg-bg select-none" style={{ height: contentH + HEADER_H }}>
       <div className="h-9 flex items-center gap-2 px-3 border-b border-line text-xs text-muted">
         <span>Timeline</span>
-        <span className="text-[#717171]">· click/shift-click clips · click a cut between clips to add a transition · double-click Text track to add text</span>
+        <span className="text-subtle">· click/shift-click clips · click a cut between clips to add a transition · double-click Text track to add text</span>
         <div className="ml-auto flex items-center gap-1">
           <button className="w-7 h-7 rounded-full hover:bg-chip text-base" onClick={() => zoom(1 / 1.5)} title="Zoom out">−</button>
           <input
@@ -232,7 +232,7 @@ export function Timeline({ height }: { height: number }) {
           {TRACKS.map((t) => (
             <div key={t.key} style={{ height: t.h }} className="px-3 flex items-center text-xs text-muted border-t border-line">
               {t.label}
-              {t.key === "cue" && !p.subtitle.enabled && <span className="ml-1 text-[10px] text-[#717171]">(off)</span>}
+              {t.key === "cue" && !p.subtitle.enabled && <span className="ml-1 text-[10px] text-subtle">(off)</span>}
             </div>
           ))}
         </div>
@@ -252,7 +252,7 @@ export function Timeline({ height }: { height: number }) {
             {/* Ruler */}
             <div className="absolute inset-x-0 top-0 cursor-text" style={{ height: RULER_H }} onPointerDown={scrub}>
               {ticks.map((t) => (
-                <div key={t} className="absolute top-0 h-full border-l border-[#3f3f3f]" style={{ left: t * scale }}>
+                <div key={t} className="absolute top-0 h-full border-l border-line-strong" style={{ left: t * scale }}>
                   <span className="absolute left-1 top-1 text-[10px] text-muted tabular-nums">{formatRuler(t)}</span>
                 </div>
               ))}
@@ -279,12 +279,24 @@ export function Timeline({ height }: { height: number }) {
 
             {/* Intro region before the first image */}
             {offset > 0 && (
-              <div
-                className="absolute rounded-md border border-dashed border-[#3f3f3f] text-[10px] text-[#717171] flex items-center justify-center overflow-hidden pointer-events-none"
-                style={{ top: top.image + 4, height: clipH, left: 0, width: offset * scale - 2 }}
-              >
-                {offset * scale > 50 && `Intro ${offset.toFixed(2)}s`}
-              </div>
+              p.chapter ? (
+                <div
+                  className="absolute rounded-md bg-[#1B1B1B] ring-1 ring-[#FFD23F]/40 flex flex-col items-center justify-center gap-0.5 px-2 overflow-hidden pointer-events-none text-center"
+                  style={{ top: top.image + 4, height: clipH, left: 0, width: offset * scale - 2 }}
+                >
+                  {p.chapter.label && offset * scale > 50 && (
+                    <span className="text-[9px] font-bold uppercase tracking-[0.2em] text-[#FFD23F]">{p.chapter.label}</span>
+                  )}
+                  {offset * scale > 40 && <span className="text-[11px] font-semibold text-white truncate max-w-full">{p.chapter.title}</span>}
+                </div>
+              ) : (
+                <div
+                  className="absolute rounded-md border border-dashed border-line-strong text-[10px] text-subtle flex items-center justify-center overflow-hidden pointer-events-none"
+                  style={{ top: top.image + 4, height: clipH, left: 0, width: offset * scale - 2 }}
+                >
+                  {offset * scale > 50 && `Intro ${offset.toFixed(2)}s`}
+                </div>
+              )
             )}
 
             {/* Image clips */}
@@ -439,7 +451,7 @@ export function Timeline({ height }: { height: number }) {
                   left={c.start * scale}
                   width={(c.end - c.start) * scale}
                   selected={selected}
-                  color={p.subtitle.enabled ? "bg-[#2ba640]" : "bg-[#2ba640]/40"}
+                  color={p.subtitle.enabled ? "bg-success" : "bg-success/40"}
                   label={c.text}
                   onDrag={(e, mode) => dragClip(e, "cue", c.id, mode)}
                 />

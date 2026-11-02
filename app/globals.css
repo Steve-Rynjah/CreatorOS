@@ -1,18 +1,24 @@
 @import "tailwindcss";
 
-/* YouTube dark palette */
+/* Dark palette — TailAdmin greys + brand blue (matches the Trade Journal app).
+   Every component reads these tokens, so this block is the whole theme. */
 :root {
-  --bg: #0f0f0f;
-  --surface: #181818;
-  --raised: #212121;
-  --chip: #272727;
-  --hover: #3f3f3f;
-  --line: rgba(255, 255, 255, 0.1);
-  --fg: #f1f1f1;
-  --muted: #aaaaaa;
-  --accent: #ff0000;
-  --accent-hover: #cc0000;
-  --link: #3ea6ff;
+  --bg: #101828;          /* gray-900: page */
+  --surface: #1a2231;     /* gray-dark: sidebar, header, panels */
+  --raised: #1d2939;      /* gray-800: cards */
+  --chip: #243042;        /* controls, chips */
+  --hover: #344054;       /* gray-700: hover / tracks */
+  --line: #1d2939;        /* gray-800: rules and borders */
+  --line-strong: #344054; /* gray-700: input borders */
+  --fg: #e4e7ec;          /* gray-200: primary text */
+  --muted: #98a2b3;       /* gray-400: secondary text */
+  --subtle: #667085;      /* gray-500: placeholders, faint hints */
+  --accent: #465fff;      /* brand-500 */
+  --accent-hover: #3641f5;/* brand-600 */
+  --link: #7592ff;        /* brand-400 */
+  --success: #12b76a;
+  --warning: #f79009;
+  --error: #f04438;
   color-scheme: dark;
 }
 
@@ -23,24 +29,56 @@
   --color-chip: var(--chip);
   --color-hover: var(--hover);
   --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
   --color-fg: var(--fg);
   --color-muted: var(--muted);
+  --color-subtle: var(--subtle);
   --color-accent: var(--accent);
   --color-accent-hover: var(--accent-hover);
   --color-link: var(--link);
-  --font-sans: var(--font-roboto), Roboto, Arial, sans-serif;
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-error: var(--error);
+  --font-sans: var(--font-outfit), Outfit, ui-sans-serif, system-ui, sans-serif;
 }
 
 html,
 body {
   background: var(--bg);
   color: var(--fg);
-  font-family: var(--font-roboto), Roboto, Arial, sans-serif;
+  font-family: var(--font-outfit), Outfit, ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 4px rgba(70, 95, 255, 0.12);
 }
 
 * {
   scrollbar-width: thin;
-  scrollbar-color: #555 transparent;
+  scrollbar-color: var(--hover) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--hover);
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+
+@utility animate-rise {
+  animation: rise 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 input[type="range"] {
@@ -73,3 +111,24 @@ input[type="color"]::-webkit-color-swatch {
 .preset:hover .anim-dissolve { animation: tr-dissolve 1.6s ease-in-out infinite alternate; }
 .preset:hover .anim-slide-left { animation: tr-left 1.6s ease-in-out infinite alternate; }
 .preset:hover .anim-slide-right { animation: tr-right 1.6s ease-in-out infinite alternate; }
+
+/* Dropdowns: own chevron, inset from the border (the native arrow sat against the edge).
+   Unlayered on purpose so it wins over Tailwind's px-* utilities. */
+select {
+  -webkit-appearance: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2398a2b3' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 16px;
+  padding-right: 38px;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+select:disabled {
+  cursor: default;
+}
+select option {
+  background: var(--raised);
+  color: var(--fg);
+}

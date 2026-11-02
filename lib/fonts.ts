@@ -1,11 +1,14 @@
-import { Bebas_Neue, Montserrat, Oswald, Roboto } from "next/font/google";
+import { Bebas_Neue, Montserrat, Oswald, Outfit, Roboto } from "next/font/google";
+
+/** UI font (same as the Trade Journal app). */
+export const outfit = Outfit({ subsets: ["latin"], variable: "--font-outfit" });
 
 export const roboto = Roboto({ subsets: ["latin"], weight: ["400", "500", "700", "900"], variable: "--font-roboto" });
 export const oswald = Oswald({ subsets: ["latin"], weight: ["400", "700"], variable: "--font-oswald" });
-export const montserrat = Montserrat({ subsets: ["latin"], weight: ["500", "800"], variable: "--font-montserrat" });
+export const montserrat = Montserrat({ subsets: ["latin"], weight: ["500", "700", "800"], variable: "--font-montserrat" });
 export const bebas = Bebas_Neue({ subsets: ["latin"], weight: "400", variable: "--font-bebas" });
 
-export const fontVariables = [roboto, oswald, montserrat, bebas].map((f) => f.variable).join(" ");
+export const fontVariables = [outfit, roboto, oswald, montserrat, bebas].map((f) => f.variable).join(" ");
 
 /** Fonts usable for on-video text. `family` is a CSS font-family list usable by canvas. */
 export const TEXT_FONTS: { key: string; label: string; family: string }[] = [
@@ -28,6 +31,7 @@ export async function preloadCanvasFonts() {
     TEXT_FONTS.flatMap((f) => [
       document.fonts.load(`400 40px ${f.family}`),
       document.fonts.load(`700 40px ${f.family}`),
+      document.fonts.load(`800 40px ${f.family}`),
     ]),
   ).catch(() => {});
 }

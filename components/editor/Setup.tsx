@@ -1,6 +1,6 @@
 "use client";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Button, Label, PathField, ProgressBar, Segmented, Toggle, inputCls, pollJob } from "@/components/ui";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Alert, Button, ProgressBar, pollJob } from "@/components/ui";
 import { fileUrl } from "@/lib/editor/render";
 import { formatTime, uid } from "@/lib/editor/timing";
 import type { Cue, ImageClip, Motion, Project, TextClip } from "@/lib/editor/types";
@@ -9,6 +9,8 @@ import {
   DEFAULT_VOICE,
   SPEEDS,
   VOICES,
+  chapterOf,
+  chapterSpeech,
   isSpeed,
   isVoice,
   spokenText,
@@ -38,7 +40,7 @@ export function savedKey(imagesDir: string, audioDir: string) {
   return `creatoros:project:${imagesDir}|${audioDir}`;
 }
 
-type BuildOptions = { subtitles: boolean; onScreen: boolean; motion: boolean };
+type BuildOptions = { subtitles: boolean; onScreen: boolean; motion: boolean; chapter: boolean };
 
 function scriptMotion(text: string): Motion {
   if (/zoom\s*-?\s*in|push\s*in/i.test(text)) return "zoom-in";
@@ -70,6 +72,8 @@ export function buildScriptProject(
   const shots = narration.shots;
   const byNumber = shots.every((s) => imgs.some((i) => i.index === s.n));
   const shotInfo = new Map(part.shots.map((s) => [s.n, s]));
+  const chapterInfo = narration.intro ? chapterOf(part) : null;
+  const chapter = chapterInfo && narration.intro ? { ...chapterInfo, duration: narration.intro.end } : undefined;
 
   const images: ImageClip[] = [];
   const texts: TextClip[] = [];
@@ -104,12 +108,15 @@ export function buildScriptProject(
         x: 0.5,
         y: 0.14,
         size: 72,
-        font: "oswald",
-        color: "#ffffff",
+        font: "montserrat",
+        color: "#FFFFFF",
         bold: true,
         background: true,
-        bgColor: "#000000b3",
+        bgColor: "#1B1B1B",
         fade: true,
+        align: "center",
+        anim: "pop",
+        animDur: 0.3,
       });
     }
   });
@@ -138,15 +145,17 @@ export function buildScriptProject(
     peaksPerSec: scan.peaksPerSec,
     warnings,
     secondsPerImage: 5,
-    offsetOverride: 0,
-    introFill: "first",
+    // The title card plays before the first shot.
+    offsetOverride: chapter ? shots[0].start : 0,
+    introFill: chapter ? "black" : "first",
+    chapter,
     fit: saved?.fit ?? "cover",
     zoomAmount: saved?.zoomAmount ?? 0.12,
     script: { file: meta.file, part: part.title, voice: meta.voice, shots: shots.length },
     images,
     texts: saved?.texts?.length ? saved.texts : texts,
-    cues: saved?.cues?.length ? saved.cues : cues,
-    subtitle: saved?.subtitle ?? { enabled: opts.subtitles, size: 46, position: "bottom", box: true },
+    cues: saved?.cues?.length && !!saved.chapter === !!chapter ? saved.cues : cues,
+    subtitle: saved?.subtitle ?? { enabled: opts.subtitles, size: 64, position: "bottom", box: false, style: "modern", highlight: "#FFD23F" },
   };
 }
 
@@ -156,7 +165,7 @@ export function Setup({ onLoaded }: { onLoaded: (p: Project) => void }) {
   const [partKey, setPartKey] = useState<string>("");
   const [voice, setVoice] = useState<VoiceId>(DEFAULT_VOICE);
   const [rate, setRate] = useState<SpeedId>(DEFAULT_SPEED);
-  const [opts, setOpts] = useState<BuildOptions>({ subtitles: true, onScreen: true, motion: true });
+  const [opts, setOpts] = useState<BuildOptions>({ subtitles: true, onScreen: true, motion: true, chapter: true });
   const [narrations, setNarrations] = useState<Record<string, Narration>>({});
   const [job, setJob] = useState<{ progress: number; stage: string } | null>(null);
   const [reading, setReading] = useState(false);
@@ -168,33 +177,39 @@ export function Setup({ onLoaded }: { onLoaded: (p: Project) => void }) {
   // Playback position, tied to the recording it belongs to.
   const [clock, setClock] = useState({ key: "", t: 0 });
 
-  // Restore the last session after hydration.
+  // Every visit starts with empty sources; only the voice, speed and switches are remembered.
   useEffect(() => {
     try {
+      localStorage.removeItem(SCRIPT_KEY); // older versions kept the whole script here
       const last = JSON.parse(localStorage.getItem(LAST_KEY) || "null");
-      const saved = JSON.parse(localStorage.getItem(SCRIPT_KEY) || "null") as ParsedScript | null;
-      /* eslint-disable react-hooks/set-state-in-effect -- restore from localStorage after hydration */
-      if (saved?.parts?.length) setScript(saved);
+      /* eslint-disable react-hooks/set-state-in-effect -- restore preferences from localStorage after hydration */
       if (last) {
-        setImagesDir(last.imagesDir ?? "");
-        if (last.partKey && saved?.parts.some((p) => p.key === last.partKey)) setPartKey(last.partKey);
-        else if (saved?.parts.length) setPartKey(saved.parts[0].key);
         if (isVoice(last.voice)) setVoice(last.voice);
         if (isSpeed(last.rate)) setRate(last.rate);
         if (last.opts) setOpts((o) => ({ ...o, ...last.opts }));
-      } else if (saved?.parts.length) setPartKey(saved.parts[0].key);
+      }
       /* eslint-enable react-hooks/set-state-in-effect */
     } catch {}
   }, []);
 
   useEffect(() => {
     try {
-      localStorage.setItem(LAST_KEY, JSON.stringify({ imagesDir, partKey, voice, rate, opts }));
+      localStorage.setItem(LAST_KEY, JSON.stringify({ voice, rate, opts }));
     } catch {}
-  }, [imagesDir, partKey, voice, rate, opts]);
+  }, [voice, rate, opts]);
+
+  function clearScript() {
+    audioRef.current?.pause();
+    setScript(null);
+    setPartKey("");
+    setNarrations({});
+    setError(null);
+  }
 
   const part = script?.parts.find((p) => p.key === partKey) ?? null;
-  const narrationKey = part ? `${script?.file}|${part.key}|${voice}|${rate}` : "";
+  const chapter = part ? chapterOf(part) : null;
+  const withCard = !!chapter && opts.chapter;
+  const narrationKey = part ? `${script?.file}|${part.key}|${voice}|${rate}|${withCard ? "card" : ""}` : "";
   const narration = narrations[narrationKey] ?? null;
   const voiceLabel = VOICES.find((v) => v.id === voice)?.label ?? voice;
   const time = clock.key === narrationKey ? clock.t : 0;
@@ -216,9 +231,6 @@ export function Setup({ onLoaded }: { onLoaded: (p: Project) => void }) {
       setScript(parsed);
       setPartKey(parsed.parts[0].key);
       setNarrations({});
-      try {
-        localStorage.setItem(SCRIPT_KEY, JSON.stringify(parsed));
-      } catch {}
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -235,7 +247,12 @@ export function Setup({ onLoaded }: { onLoaded: (p: Project) => void }) {
       const r = await fetch("/api/narrate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ shots: part.shots.map((s) => ({ n: s.n, narration: s.narration })), voice, rate }),
+        body: JSON.stringify({
+          shots: part.shots.map((s) => ({ n: s.n, narration: s.narration })),
+          voice,
+          rate,
+          intro: withCard && chapter ? chapterSpeech(chapter) : undefined,
+        }),
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error);
@@ -302,6 +319,7 @@ export function Setup({ onLoaded }: { onLoaded: (p: Project) => void }) {
 
   const totalShots = script?.parts.reduce((s, p) => s + p.shots.length, 0) ?? 0;
   const busy = !!job || building || reading;
+  const progress = narration ? Math.min(time / narration.duration, 1) : 0;
 
   return (
     <div className="h-full overflow-auto">
@@ -314,138 +332,236 @@ export function Setup({ onLoaded }: { onLoaded: (p: Project) => void }) {
         onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
         hidden
       />
-      <form onSubmit={build} className="max-w-3xl mx-auto px-6 py-12 space-y-6">
-        <div>
-          <h1 className="text-2xl font-bold">New video part</h1>
-          <p className="text-muted text-sm mt-1">
-            Point to the shot images, add the script PDF and pick a part. The narration is spoken shot by shot, so every image stays on
-            screen exactly as long as its lines are read, and the subtitles use the script&apos;s own words.
-          </p>
+      <form onSubmit={build} className="max-w-3xl mx-auto px-6 py-12 space-y-8 animate-rise">
+        <header>
+          <div className="inline-flex items-center gap-2 rounded-full bg-[#FFD23F]/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#FFD23F]">
+            <span className="relative flex h-2 w-2">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#FFD23F] opacity-60" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-[#FFD23F]" />
+            </span>
+            Scene · Take 1
+          </div>
+          <h1 className="mt-4 text-4xl font-bold tracking-tight">
+            Lights. Script. <span className="text-[#FFD23F]">Action.</span>
+          </h1>
+          <p className="text-muted mt-2">Drop in your scenes and script. The voice, timing and subtitles are handled for you.</p>
+        </header>
+
+        {/* Sources */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <FolderCard value={imagesDir} onChange={setImagesDir} onClear={() => setImagesDir("")} />
+          <PdfCard
+            file={script?.file ?? null}
+            meta={script ? `${script.parts.length} parts · ${totalShots} shots · ${script.pages} pages` : null}
+            reading={reading}
+            onFile={readPdf}
+            onClear={clearScript}
+          />
         </div>
 
-        <div className="bg-raised rounded-xl p-5 space-y-5">
-          <div>
-            <Label hint="001.png, 002.png … (shot numbers)">1 · Shot images folder</Label>
-            <PathField value={imagesDir} onChange={setImagesDir} placeholder="/Users/you/Videos/Part1/shots" prompt="Choose the shot images folder" />
-          </div>
-
-          <div>
-            <Label hint={script ? `${script.parts.length} parts · ${totalShots} shots · ${script.pages} pages` : "PDF with NARRATION per shot"}>
-              2 · Script
-            </Label>
-            <PdfDrop file={script?.file ?? null} reading={reading} onFile={readPdf} />
-          </div>
-
-          {script && (
-            <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto_auto] gap-3 items-end">
-              <div>
-                <Label>Part</Label>
-                <select className={inputCls} value={partKey} onChange={(e) => setPartKey(e.target.value)} disabled={busy}>
+        {script && (
+          <section className="rounded-2xl border border-line-strong/60 bg-raised/60 overflow-hidden">
+            <div className="p-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Field label="Part">
+                <Select value={partKey} onChange={setPartKey} disabled={busy}>
                   {script.parts.map((p) => (
                     <option key={p.key} value={p.key}>
                       {p.title}
-                      {p.name ? ` – ${p.name}` : ""}
-                      {p.timing ? ` (${p.timing})` : ""} · {p.shots.length} shots
+                      {p.name ? ` – ${p.name}` : ""} · {p.shots.length} shots
                     </option>
                   ))}
-                </select>
-              </div>
-              <div>
-                <Label>Voice</Label>
-                <select className={inputCls} value={voice} onChange={(e) => setVoice(e.target.value as VoiceId)} disabled={busy}>
+                </Select>
+              </Field>
+              <Field label="Voice">
+                <Select value={voice} onChange={(v) => setVoice(v as VoiceId)} disabled={busy}>
                   {VOICES.map((v) => (
                     <option key={v.id} value={v.id}>
                       {v.label} — {v.hint}
                     </option>
                   ))}
-                </select>
-              </div>
-              <div>
-                <Label>Speed</Label>
-                <Segmented value={rate} options={SPEEDS.map((s) => ({ value: s.id, label: s.label }))} onChange={(v) => !busy && setRate(v)} />
-              </div>
+                </Select>
+              </Field>
+              <Field label="Speed" className="sm:col-span-2">
+                <div className="grid grid-cols-3 bg-bg/70 border border-line-strong/60 rounded-xl p-1 gap-1">
+                  {SPEEDS.map((s) => (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => !busy && setRate(s.id)}
+                      className={`h-8 rounded-lg text-sm font-medium transition-all ${
+                        rate === s.id ? "bg-accent text-white shadow-sm" : "text-muted hover:text-fg hover:bg-chip"
+                      }`}
+                    >
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
+              </Field>
             </div>
-          )}
 
-          {part && (
-            <div className="flex items-center gap-3">
-              <button
-                type="button"
-                onClick={togglePlay}
-                disabled={!!job || building}
-                aria-label={playing ? "Pause" : "Play"}
-                className="w-11 h-11 shrink-0 rounded-full bg-fg text-bg grid place-items-center hover:opacity-90 disabled:opacity-40"
-              >
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
-                  {playing ? <path d="M6 5h4v14H6zM14 5h4v14h-4z" /> : <path d="M8 5v14l11-7z" />}
-                </svg>
-              </button>
-              <div className="flex-1 min-w-0">
-                {job ? (
-                  <div className="space-y-1.5">
-                    <div className="text-xs text-muted">{job.stage}…</div>
-                    <ProgressBar value={job.progress} />
-                  </div>
-                ) : narration ? (
-                  <div className="flex items-center gap-3">
-                    <input
-                      type="range"
-                      min={0}
-                      max={narration.duration}
-                      step={0.01}
-                      value={Math.min(time, narration.duration)}
-                      onChange={(e) => seek(Number(e.target.value))}
-                      className="flex-1 accent-[var(--color-accent,#ff0033)]"
-                    />
-                    <span className="text-xs text-muted tabular-nums whitespace-nowrap">
-                      {formatTime(time, false)} / {formatTime(narration.duration, false)}
-                    </span>
-                  </div>
-                ) : (
-                  <div className="text-sm text-muted">Press play to hear {part.title} read by {voiceLabel}.</div>
+            {part && (
+              <div className="border-t border-line-strong/50 bg-bg/40 px-5 py-4 flex items-center gap-4">
+                <button
+                  type="button"
+                  onClick={togglePlay}
+                  disabled={!!job || building}
+                  aria-label={playing ? "Pause" : "Play"}
+                  className="w-12 h-12 shrink-0 rounded-full bg-accent text-white grid place-items-center shadow-[0_6px_20px_-6px_var(--accent)] hover:bg-accent-hover hover:scale-105 active:scale-95 transition disabled:opacity-40"
+                >
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+                    {playing ? <path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z" /> : <path d="M8 5.5v13a1 1 0 001.5.86l10.5-6.5a1 1 0 000-1.72L9.5 4.64A1 1 0 008 5.5z" />}
+                  </svg>
+                </button>
+                <div className="flex-1 min-w-0">
+                  {job ? (
+                    <div className="space-y-2">
+                      <div className="text-xs text-muted">{job.stage}…</div>
+                      <ProgressBar value={job.progress} />
+                    </div>
+                  ) : narration ? (
+                    <div className="space-y-1.5">
+                      <div className="relative h-1.5 rounded-full bg-hover">
+                        <div className="absolute inset-y-0 left-0 rounded-full bg-accent" style={{ width: `${progress * 100}%` }} />
+                        <input
+                          type="range"
+                          min={0}
+                          max={narration.duration}
+                          step={0.01}
+                          value={Math.min(time, narration.duration)}
+                          onChange={(e) => seek(Number(e.target.value))}
+                          aria-label="Seek"
+                          className="absolute inset-0 w-full opacity-0 cursor-pointer"
+                        />
+                      </div>
+                      <div className="flex justify-between text-[11px] text-muted tabular-nums">
+                        <span>{formatTime(time, false)}</span>
+                        <span>{formatTime(narration.duration, false)}</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-sm">
+                      <div className="font-medium">Preview the narration</div>
+                      <div className="text-muted text-xs mt-0.5">
+                        {part.title} · read by {voiceLabel}
+                      </div>
+                    </div>
+                  )}
+                </div>
+                {narration && !job && (
+                  <a
+                    href={fileUrl(narration.audioPath, true)}
+                    title="Download audio"
+                    aria-label="Download audio"
+                    className="w-9 h-9 shrink-0 rounded-lg grid place-items-center text-muted hover:text-fg hover:bg-chip transition-colors"
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                      <path d="M12 4v11m0 0l-4-4m4 4l4-4M5 19h14" />
+                    </svg>
+                  </a>
                 )}
               </div>
-              {narration && !job && (
-                <a href={fileUrl(narration.audioPath, true)} className="text-xs text-link hover:underline whitespace-nowrap">
-                  Download audio
-                </a>
-              )}
-            </div>
-          )}
-        </div>
-
-        {part && <NarrationBox part={part} narration={narration} time={time} playing={playing} onSeek={seek} />}
+            )}
+          </section>
+        )}
 
         {part && (
-          <div className="flex flex-wrap gap-x-6 gap-y-2">
-            <Toggle checked={opts.subtitles} onChange={(v) => setOpts((o) => ({ ...o, subtitles: v }))} label="Subtitles from the script" />
-            <Toggle checked={opts.onScreen} onChange={(v) => setOpts((o) => ({ ...o, onScreen: v }))} label="On-screen text from the script" />
-            <Toggle checked={opts.motion} onChange={(v) => setOpts((o) => ({ ...o, motion: v }))} label="Zoom motion from the script" />
+          <NarrationBox part={part} chapter={withCard ? chapter : null} narration={narration} time={time} playing={playing} onSeek={seek} />
+        )}
+
+        {part && (
+          <div className="flex flex-wrap gap-2">
+            {chapter && (
+              <Chip checked={opts.chapter} onChange={(v) => setOpts((o) => ({ ...o, chapter: v }))} label="Chapter title card" />
+            )}
+            <Chip checked={opts.subtitles} onChange={(v) => setOpts((o) => ({ ...o, subtitles: v }))} label="Subtitles" />
+            <Chip checked={opts.onScreen} onChange={(v) => setOpts((o) => ({ ...o, onScreen: v }))} label="On-screen text" />
+            <Chip checked={opts.motion} onChange={(v) => setOpts((o) => ({ ...o, motion: v }))} label="Zoom motion" />
           </div>
         )}
 
         {error && <Alert tone="error">{error}</Alert>}
 
-        <div className="flex items-center gap-4">
-          <Button variant="primary" size="lg" disabled={busy || !imagesDir || !part}>
-            {building ? (job ? "Making the narration…" : "Preparing timeline…") : "Build timeline"}
-          </Button>
-          <span className="text-xs text-muted">Each image runs from the start of its shot&apos;s narration to the start of the next.</span>
-        </div>
+        <Button variant="primary" size="lg" disabled={busy || !imagesDir || !part} className="w-full sm:w-auto rounded-xl">
+          {building ? (job ? "Making the narration…" : "Preparing timeline…") : "Build timeline"}
+          {!building && (
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M5 12h14m-5-5l5 5-5 5" />
+            </svg>
+          )}
+        </Button>
       </form>
     </div>
   );
 }
 
-/** The selected part's narration, shot by shot, following the audio so you can check it matches the script. */
+function Field({ label, className = "", children }: { label: string; className?: string; children: ReactNode }) {
+  return (
+    <label className={`block ${className}`}>
+      <span className="block text-xs font-medium text-muted mb-1.5">{label}</span>
+      {children}
+    </label>
+  );
+}
+
+function Select({
+  value,
+  onChange,
+  disabled,
+  children,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  disabled?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <div className="relative">
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+        className="w-full h-11 appearance-none pl-3.5 pr-9 rounded-xl bg-bg/70 border border-line-strong/60 text-sm text-fg truncate focus:outline-none focus:border-link transition-colors hover:border-line-strong disabled:opacity-50"
+      >
+        {children}
+      </select>
+    </div>
+  );
+}
+
+function Chip({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      onClick={() => onChange(!checked)}
+      className={`h-9 pl-2.5 pr-3.5 rounded-full border text-sm inline-flex items-center gap-2 transition-colors ${
+        checked ? "border-accent/50 bg-accent/15 text-fg" : "border-line-strong/60 text-muted hover:text-fg hover:border-line-strong"
+      }`}
+    >
+      <span className={`w-4 h-4 rounded-full grid place-items-center transition-colors ${checked ? "bg-accent" : "border border-line-strong"}`}>
+        {checked && (
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <path d="M5 12l5 5 9-10" />
+          </svg>
+        )}
+      </span>
+      {label}
+    </button>
+  );
+}
+
+/** The selected part's narration as plain prose, following the audio while it plays. */
 function NarrationBox({
   part,
+  chapter,
   narration,
   time,
   playing,
   onSeek,
 }: {
   part: ScriptPart;
+  chapter: { label: string | null; title: string } | null;
   narration: Narration | null;
   time: number;
   playing: boolean;
@@ -454,10 +570,10 @@ function NarrationBox({
   const boxRef = useRef<HTMLDivElement>(null);
   const timed = useMemo(() => new Map(narration?.shots.map((s) => [s.n, s]) ?? []), [narration]);
   const active = narration?.shots.find((s) => time >= s.start && time < s.end)?.n ?? null;
-  const activeCue = narration?.cues.find((c) => time >= c.start && time < c.end) ?? null;
   const words = part.shots.reduce((s, x) => s + spokenText(x.narration).split(" ").length, 0);
+  const following = playing || time > 0;
 
-  // Keep the shot being read in view.
+  // Keep the passage being read in view.
   useEffect(() => {
     if (!playing || active === null) return;
     const box = boxRef.current;
@@ -465,68 +581,152 @@ function NarrationBox({
     if (!box || !el) return;
     const top = el.offsetTop - box.offsetTop;
     if (top < box.scrollTop || top + el.offsetHeight > box.scrollTop + box.clientHeight) {
-      box.scrollTo({ top: top - 12, behavior: "smooth" });
+      box.scrollTo({ top: top - 24, behavior: "smooth" });
     }
   }, [active, playing]);
 
   return (
-    <div>
-      <Label hint={`${part.shots.length} shots · ${words} words${narration ? ` · ${formatTime(narration.duration, false)} spoken` : ""}`}>
-        3 · Narration — {part.title}
-        {part.name ? ` · ${part.name}` : ""}
-      </Label>
-      <div ref={boxRef} className="relative bg-raised rounded-xl max-h-[420px] overflow-auto divide-y divide-line">
-        {part.shots.map((s) => {
-          const t = timed.get(s.n);
-          const isActive = active === s.n;
-          return (
-            <div
-              key={s.n}
-              data-shot={s.n}
-              onClick={() => t && onSeek(t.start)}
-              className={`px-4 py-3 flex gap-4 transition-colors ${t ? "cursor-pointer hover:bg-hover/50" : ""} ${
-                isActive ? "bg-link/10 shadow-[inset_3px_0_0_var(--color-link,#3ea6ff)]" : ""
-              }`}
-            >
-              <div className="w-20 shrink-0 text-xs tabular-nums">
-                <div className={`font-semibold ${isActive ? "text-link" : ""}`}>SHOT {String(s.n).padStart(3, "0")}</div>
-                <div className="text-muted">
-                  {t ? `${formatTime(t.start, false).slice(0, -3)} · ${(t.end - t.start).toFixed(1)}s` : (s.time ?? "")}
-                </div>
-              </div>
-              <div className="flex-1 min-w-0 text-sm leading-relaxed">
-                {isActive && activeCue ? <Highlighted text={spokenText(s.narration)} cue={activeCue.text} /> : (
-                  <div className="whitespace-pre-line">{s.narration}</div>
-                )}
-                {(s.visual || s.onScreen) && (
-                  <div className="mt-1 text-xs text-muted line-clamp-2">
-                    {s.onScreen && <span className="text-fg/80">“{s.onScreen}” · </span>}
-                    {s.visual}
-                  </div>
-                )}
-              </div>
-            </div>
-          );
-        })}
+    <section className="rounded-2xl border border-line-strong/60 bg-raised/60">
+      <div className="flex items-baseline justify-between gap-3 px-5 pt-4 pb-3">
+        <h2 className="text-sm font-semibold">
+          Narration
+          <span className="text-muted font-normal">
+            {" "}
+            · {part.title}
+            {part.name ? ` – ${part.name}` : ""}
+          </span>
+        </h2>
+        <span className="text-xs text-muted tabular-nums whitespace-nowrap">
+          {words} words{narration ? ` · ${formatTime(narration.duration, false)}` : ""}
+        </span>
       </div>
-    </div>
+      <div ref={boxRef} className="max-h-[360px] overflow-auto px-5 pb-5">
+        {chapter && (
+          <button
+            type="button"
+            onClick={() => narration?.intro && onSeek(0)}
+            className={`mb-3 inline-flex items-center gap-2 rounded-lg px-2.5 py-1 text-xs transition-colors ${
+              narration?.intro && time < narration.intro.end && following ? "bg-[#FFD23F] text-[#1B1B1B]" : "bg-[#FFD23F]/12 text-[#FFD23F]"
+            }`}
+          >
+            <span className="font-semibold uppercase tracking-wider">{chapter.label ?? "Chapter"}</span>
+            <span className="opacity-60">·</span>
+            {chapter.title}
+          </button>
+        )}
+        <p className="text-[15px] leading-8">
+          {part.shots.map((s) => {
+            const t = timed.get(s.n);
+            const isActive = active === s.n;
+            return (
+              <span
+                key={s.n}
+                data-shot={s.n}
+                onClick={() => t && onSeek(t.start)}
+                className={`rounded px-0.5 -mx-0.5 transition-colors ${t ? "cursor-pointer hover:bg-hover/60" : ""} ${
+                  isActive ? "bg-accent/20 text-fg" : following && narration ? "text-muted" : "text-fg/90"
+                }`}
+              >
+                {spokenText(s.narration)}{" "}
+              </span>
+            );
+          })}
+        </p>
+      </div>
+    </section>
   );
 }
 
-function Highlighted({ text, cue }: { text: string; cue: string }) {
-  const i = text.indexOf(cue);
-  if (i < 0) return <div>{text}</div>;
+const cardCls =
+  "group relative rounded-2xl border p-5 flex flex-col gap-4 text-left transition-all hover:-translate-y-0.5 hover:shadow-[0_12px_30px_-12px_rgba(0,0,0,0.6)]";
+
+function CheckBadge() {
   return (
-    <div>
-      <span className="text-muted">{text.slice(0, i)}</span>
-      <mark className="bg-transparent text-fg font-semibold underline decoration-link decoration-2 underline-offset-4">{cue}</mark>
-      <span>{text.slice(i + cue.length)}</span>
+    <span className="absolute top-4 right-4 w-5 h-5 rounded-full bg-success grid place-items-center">
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        <path d="M5 12l5 5 9-10" />
+      </svg>
+    </span>
+  );
+}
+
+/** Scene images folder — opens the native folder picker; the path can also be pasted. */
+function FolderCard({ value, onChange, onClear }: { value: string; onChange: (v: string) => void; onClear: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const name = value.split("/").filter(Boolean).pop();
+
+  async function browse() {
+    setBusy(true);
+    try {
+      const r = await fetch("/api/pick-folder", { method: "POST", body: JSON.stringify({ prompt: "Choose the scene images folder" }) });
+      const j = await r.json();
+      if (j.path) onChange(j.path);
+      else if (j.error) setEditing(true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      className={`${cardCls} ${value ? "border-line-strong/60 bg-raised/60" : "border-dashed border-line-strong bg-raised/30 hover:border-link/60"}`}
+    >
+      {value && <CheckBadge />}
+      <button type="button" onClick={browse} disabled={busy} className="flex flex-col gap-4 text-left outline-none">
+        <span className="w-12 h-12 rounded-xl bg-gradient-to-br from-sky-400/25 to-accent/25 text-sky-300 grid place-items-center ring-1 ring-sky-400/20 group-hover:scale-105 transition-transform">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <rect x="3" y="3" width="18" height="18" rx="3" />
+            <circle cx="8.5" cy="8.5" r="1.5" />
+            <path d="M21 15l-5-5L5 21" />
+          </svg>
+        </span>
+        <span className="min-w-0">
+          <span className="block font-semibold">{busy ? "Choosing…" : value ? name : "Scene images"}</span>
+          <span className="block text-xs text-muted mt-0.5 truncate">{value || "Choose the folder with 001.png, 002.png…"}</span>
+        </span>
+      </button>
+      {editing ? (
+        <input
+          autoFocus
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onBlur={() => setEditing(false)}
+          onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), setEditing(false))}
+          placeholder="/Users/you/Videos/Part1/shots"
+          spellCheck={false}
+          className="w-full h-8 px-2.5 rounded-lg bg-bg border border-line-strong font-mono text-xs text-fg placeholder:text-subtle focus:outline-none focus:border-link"
+        />
+      ) : (
+        <div className="flex items-center gap-4 text-xs">
+          <button type="button" onClick={() => setEditing(true)} className="text-link hover:underline">
+            {value ? "Edit path" : "or paste a path"}
+          </button>
+          {value && (
+            <button type="button" onClick={onClear} className="text-muted hover:text-error transition-colors">
+              Remove
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
-/** Drop or browse for the script PDF. */
-function PdfDrop({ file, reading, onFile }: { file: string | null; reading: boolean; onFile: (f: File) => void }) {
+/** Script PDF — click or drop to upload. */
+function PdfCard({
+  file,
+  meta,
+  reading,
+  onFile,
+  onClear,
+}: {
+  file: string | null;
+  meta: string | null;
+  reading: boolean;
+  onFile: (f: File) => void;
+  onClear: () => void;
+}) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [over, setOver] = useState(false);
   return (
@@ -542,8 +742,12 @@ function PdfDrop({ file, reading, onFile }: { file: string | null; reading: bool
         const f = e.dataTransfer.files[0];
         if (f) onFile(f);
       }}
-      className={`rounded-lg border border-dashed px-4 py-4 flex items-center gap-3 transition-colors ${
-        over ? "border-link bg-link/10" : "border-[#3f3f3f] bg-bg"
+      className={`${cardCls} ${
+        over
+          ? "border-link bg-link/10"
+          : file
+            ? "border-line-strong/60 bg-raised/60"
+            : "border-dashed border-line-strong bg-raised/30 hover:border-link/60"
       }`}
     >
       <input
@@ -557,21 +761,30 @@ function PdfDrop({ file, reading, onFile }: { file: string | null; reading: bool
           e.target.value = "";
         }}
       />
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" className="text-muted shrink-0" aria-hidden>
-        <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6zm-1 7V3.5L18.5 9H13zM8 13h8v2H8v-2zm0 4h8v2H8v-2z" />
-      </svg>
-      <div className="flex-1 min-w-0 text-sm">
-        {reading ? (
-          <span className="text-muted">Reading the script…</span>
-        ) : file ? (
-          <span className="font-medium truncate block">{file}</span>
-        ) : (
-          <span className="text-muted">Drop the script PDF here</span>
-        )}
-      </div>
-      <Button type="button" size="sm" onClick={() => inputRef.current?.click()} disabled={reading}>
-        {file ? "Replace…" : "Choose PDF…"}
-      </Button>
+      {file && !reading && <CheckBadge />}
+      <button type="button" onClick={() => inputRef.current?.click()} disabled={reading} className="flex flex-col gap-4 text-left outline-none">
+        <span className="w-12 h-12 rounded-xl bg-gradient-to-br from-rose-400/25 to-orange-400/20 text-rose-300 grid place-items-center ring-1 ring-rose-400/20 group-hover:scale-105 transition-transform">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8l-5-5z" />
+            <path d="M14 3v5h5" />
+            <text x="12" y="17.5" textAnchor="middle" fontSize="5.5" fontWeight="700" fill="currentColor" stroke="none">PDF</text>
+          </svg>
+        </span>
+        <span className="min-w-0">
+          <span className="block font-semibold truncate">{reading ? "Reading the script…" : file ? file : "Script PDF"}</span>
+          <span className="block text-xs text-muted mt-0.5 truncate">{reading ? "This takes a moment" : (meta ?? "Click to upload or drop it here")}</span>
+        </span>
+      </button>
+      {file && !reading && (
+        <div className="flex items-center gap-4 text-xs">
+          <button type="button" onClick={() => inputRef.current?.click()} className="text-link hover:underline">
+            Replace PDF
+          </button>
+          <button type="button" onClick={onClear} className="text-muted hover:text-error transition-colors">
+            Remove
+          </button>
+        </div>
+      )}
     </div>
   );
 }

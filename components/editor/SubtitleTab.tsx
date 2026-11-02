@@ -6,7 +6,7 @@ import { projectStore, select, selectionStore, timeStore, updateProject, useStor
 import { parseSrt, segmentsToCues, toSrt } from "@/lib/editor/subtitles";
 import { formatTime, uid } from "@/lib/editor/timing";
 import type { Cue } from "@/lib/editor/types";
-import { TimeField } from "./TextTab";
+import { Swatches, TimeField } from "./TextTab";
 
 const LANGUAGES = [
   ["english", "English"],
@@ -170,6 +170,41 @@ export function SubtitleTab() {
 
       <section className="space-y-3">
         <Label>Style</Label>
+        <div className="grid grid-cols-2 gap-2">
+          {(
+            [
+              ["modern", "Modern"],
+              ["classic", "Classic"],
+            ] as const
+          ).map(([v, label]) => {
+            const on = (sub.style ?? "modern") === v;
+            return (
+              <button
+                key={v}
+                type="button"
+                onClick={() => setStyle({ style: v, size: v === "modern" ? Math.max(sub.size, 56) : Math.min(sub.size, 52) })}
+                className={`h-16 rounded-xl border grid place-items-center transition-colors ${
+                  on ? "border-link bg-link/10" : "border-line-strong/60 hover:border-line-strong"
+                } bg-[#1B1B1B]`}
+              >
+                {v === "modern" ? (
+                  <span className="font-[family-name:var(--font-montserrat)] font-extrabold text-sm tracking-wide [text-shadow:0_2px_0_#000,0_-1px_0_#000,1px_0_0_#000,-1px_0_0_#000]">
+                    <span style={{ color: sub.highlight ?? "#FFD23F" }}>IN</span> <span className="text-white">A T-SHIRT</span>
+                  </span>
+                ) : (
+                  <span className="text-xs text-white bg-black/80 px-1.5 py-0.5">In a t-shirt</span>
+                )}
+                <span className="sr-only">{label}</span>
+              </button>
+            );
+          })}
+        </div>
+        {(sub.style ?? "modern") === "modern" && (
+          <div>
+            <Label hint="the word being spoken">Highlight</Label>
+            <Swatches value={sub.highlight ?? "#FFD23F"} onChange={(v) => v && setStyle({ highlight: v })} />
+          </div>
+        )}
         <div className="flex items-center gap-3 flex-wrap">
           <Segmented
             value={sub.position}
@@ -183,7 +218,7 @@ export function SubtitleTab() {
         </div>
         <div>
           <Label hint={`${sub.size}px`}>Size</Label>
-          <input type="range" min={24} max={90} value={sub.size} onChange={(e) => setStyle({ size: Number(e.target.value) })} className="w-full" />
+          <input type="range" min={24} max={110} value={sub.size} onChange={(e) => setStyle({ size: Number(e.target.value) })} className="w-full" />
         </div>
       </section>
 

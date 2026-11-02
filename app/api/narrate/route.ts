@@ -14,8 +14,9 @@ export async function POST(req: Request) {
   if (!isVoice(body.voice)) return Response.json({ error: "That is not one of the voices on offer." }, { status: 400 });
   if (!isSpeed(body.rate)) return Response.json({ error: "That is not one of the speeds on offer." }, { status: 400 });
 
+  const intro = typeof body.intro === "string" && body.intro.trim() ? body.intro.trim().slice(0, 200) : undefined;
   const job = startJob("narrate", (update) =>
-    narratePart(valid, body.voice, body.rate, (stage, progress) => update({ stage, progress })),
+    narratePart(valid, body.voice, body.rate, (stage, progress) => update({ stage, progress }), intro),
   );
   return Response.json({ jobId: job.id });
 }

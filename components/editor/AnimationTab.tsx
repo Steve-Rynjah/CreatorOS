@@ -187,8 +187,8 @@ function Preset({
       } ${disabled ? "cursor-grab" : ""}`}
       title={disabled ? "Drag onto a clip, or select clips first" : `Apply ${label}`}
     >
-      <div className="relative aspect-video rounded overflow-hidden bg-[#333]">
-        {layered && <div className="absolute inset-0 bg-[#555]" />}
+      <div className="relative aspect-video rounded overflow-hidden bg-chip">
+        {layered && <div className="absolute inset-0 bg-hover" />}
         {thumb && (
           // eslint-disable-next-line @next/next/no-img-element -- local file served by our API
           <img src={thumb} alt="" draggable={false} className={`absolute inset-0 w-full h-full object-cover ${anim}`} />

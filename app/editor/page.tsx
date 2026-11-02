@@ -1,8 +1,6 @@
-import type { Metadata } from "next";
-import { Editor } from "@/components/editor/Editor";
+import { redirect } from "next/navigation";
 
-export const metadata: Metadata = { title: "Video Editor · CreatorOS" };
-
+/** The editor now lives on Home. */
 export default function EditorPage() {
-  return <Editor />;
+  redirect("/");
 }

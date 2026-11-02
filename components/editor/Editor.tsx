@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Setup, savedKey } from "./Setup";
 import { Workspace } from "./Workspace";
 import { loadProject, projectStore, selectionStore, timeStore, useStore } from "@/lib/editor/store";
@@ -82,15 +83,21 @@ export function Editor() {
       />
     );
   }
-  if (!assets) {
-    return (
-      <div className="h-full grid place-items-center">
-        <div className="w-72 space-y-3 text-center">
-          <div className="text-sm text-muted">Loading {project.images.length} images…</div>
-          <ProgressBar value={loading ?? 0} />
+  // The editor takes over the whole window (sidebar and header included). It is portalled to
+  // <body> because the page's animated <main> would otherwise trap a fixed element inside it.
+  return createPortal(
+    <div className="fixed inset-0 z-[60] bg-bg animate-rise">
+      {assets ? (
+        <Workspace assets={assets} />
+      ) : (
+        <div className="h-full grid place-items-center">
+          <div className="w-72 space-y-3 text-center">
+            <div className="text-sm text-muted">Loading {project.images.length} images…</div>
+            <ProgressBar value={loading ?? 0} />
+          </div>
         </div>
-      </div>
-    );
-  }
-  return <Workspace assets={assets} />;
+      )}
+    </div>,
+    document.body,
+  );
 }

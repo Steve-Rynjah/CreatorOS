@@ -26,7 +26,9 @@ const SHOT_GAP = 0.3;
 const CONCURRENCY = 6;
 const TIMEOUT_MS = 90_000;
 /** Bump when the audio/timing layout changes so stale caches are not reused. */
-const CACHE_VERSION = 2;
+const CACHE_VERSION = 3;
+/** Silence held on the title card after its line is spoken, before the first shot. */
+const INTRO_HOLD = 1.1;
 
 type Word = { start: number; end: number; text: string };
 
@@ -137,12 +139,19 @@ function shotCues(text: string, words: Word[], offset: number, speechEnd: number
   }
 
   const ranges = captionRanges(text);
-  const cues: NarrationCue[] = ranges.map(([a, b]) => {
+  const cues: (NarrationCue & { tokens: (number | null)[] })[] = ranges.map(([a, b]) => {
     const inside = placed.filter((w) => w.pos >= a && w.pos < b);
+    // Start time of every whitespace-separated word of the caption, where the voice reported one.
+    const tokens = [...text.slice(a, b).matchAll(/\S+/g)].map((m) => {
+      const ta = a + m.index!;
+      const tb = ta + m[0].length;
+      return placed.find((w) => w.pos >= ta && w.pos < tb)?.start ?? null;
+    });
     return {
       text: text.slice(a, b),
       start: inside.length ? inside[0].start : NaN,
       end: inside.length ? inside[inside.length - 1].end : NaN,
+      tokens,
     };
   });
 
@@ -171,7 +180,23 @@ function shotCues(text: string, words: Word[], offset: number, speechEnd: number
   }
   return cues
     .filter((c) => c.end > c.start)
-    .map((c) => ({ text: c.text, start: offset + c.start, end: offset + c.end }));
+    .map((c) => ({ text: c.text, start: offset + c.start, end: offset + c.end, words: wordStarts(c.tokens, c.start, c.end, offset) }));
+}
+
+/** Fills words the voice gave no boundary for (numbers, symbols) between their neighbours. */
+function wordStarts(tokens: (number | null)[], start: number, end: number, offset: number): number[] {
+  const out = tokens.slice();
+  if (out[0] === null) out[0] = start;
+  for (let i = 1; i < out.length; i++) {
+    if (out[i] !== null && out[i]! >= out[i - 1]!) continue;
+    let j = i;
+    while (j < out.length && (out[j] === null || out[j]! < out[i - 1]!)) j++;
+    const to = j < out.length ? out[j]! : end;
+    const from = out[i - 1]!;
+    for (let k = i; k < j; k++) out[k] = from + ((to - from) * (k - i + 1)) / (j - i + 1);
+    i = j - 1;
+  }
+  return out.map((t) => Math.round((offset + t!) * 1000) / 1000);
 }
 
 function wavFile(pcm: Float32Array, rate: number): Buffer {
@@ -203,10 +228,13 @@ export async function narratePart(
   voice: VoiceId,
   rate: SpeedId,
   onProgress: (stage: string, progress: number) => void,
+  /** Chapter title spoken over the title card, before the first shot. */
+  intro?: string,
 ): Promise<Narration> {
   const texts = shots.map((s) => spokenText(s.narration));
+  const introText = intro ? spokenText(intro) : "";
   const key = createHash("sha1")
-    .update(JSON.stringify({ v: CACHE_VERSION, voice, rate, gap: SHOT_GAP, shots: shots.map((s, i) => [s.n, texts[i]]) }))
+    .update(JSON.stringify({ v: CACHE_VERSION, voice, rate, gap: SHOT_GAP, intro: introText, hold: INTRO_HOLD, shots: shots.map((s, i) => [s.n, texts[i]]) }))
     .digest("hex")
     .slice(0, 16);
   const dir = path.join(CACHE_DIR, "narration");
@@ -216,20 +244,23 @@ export async function narratePart(
   const cached = await fs.readFile(jsonPath, "utf8").then(JSON.parse, () => null);
   if (cached && (await fs.stat(wavPath).then(() => true, () => false))) return cached as Narration;
 
-  // Speak the shots in parallel.
-  const spoken: { mp3: Buffer; words: Word[] }[] = new Array(shots.length);
+  // Speak the title (if any) and the shots in parallel; index 0 is the title.
+  const allTexts = introText ? [introText, ...texts] : texts;
+  const spokenAll: { mp3: Buffer; words: Word[] }[] = new Array(allTexts.length);
   let next = 0;
   let done = 0;
   onProgress(`Speaking shot 1 of ${shots.length}`, 0.02);
   const worker = async () => {
-    while (next < shots.length) {
+    while (next < allTexts.length) {
       const i = next++;
-      spoken[i] = await speak(texts[i], voice, rate);
+      spokenAll[i] = await speak(allTexts[i], voice, rate);
       done++;
-      onProgress(`Spoke ${done} of ${shots.length} shots`, 0.02 + 0.85 * (done / shots.length));
+      onProgress(`Spoke ${done} of ${allTexts.length} lines`, 0.02 + 0.85 * (done / allTexts.length));
     }
   };
-  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, shots.length) }, worker));
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, allTexts.length) }, worker));
+  const introSpoken = introText ? spokenAll[0] : null;
+  const spoken = introText ? spokenAll.slice(1) : spokenAll;
 
   // Decode each shot to PCM and lay them end to end.
   onProgress("Joining the shots", 0.9);
@@ -241,12 +272,22 @@ export async function narratePart(
       await fs.writeFile(f, spoken[i].mp3);
       pcms.push(await decodePcm(f, SAMPLE_RATE));
     }
+    let introPcm: Float32Array | null = null;
+    if (introSpoken) {
+      const f = path.join(tmp, "intro.mp3");
+      await fs.writeFile(f, introSpoken.mp3);
+      introPcm = await decodePcm(f, SAMPLE_RATE);
+    }
+    // The title is spoken after a short beat of the card, then held before the first shot.
+    const introLead = Math.round(0.5 * SAMPLE_RATE);
+    const introLen = introPcm ? introLead + introPcm.length + Math.round(INTRO_HOLD * SAMPLE_RATE) : 0;
     const gap = Math.round(SHOT_GAP * SAMPLE_RATE);
-    const total = pcms.reduce((s, p) => s + p.length + gap, 0);
+    const total = introLen + pcms.reduce((s, p) => s + p.length + gap, 0);
     const all = new Float32Array(total);
+    if (introPcm) all.set(introPcm, introLead);
     const timed: Narration["shots"] = [];
     const cues: NarrationCue[] = [];
-    let pos = 0;
+    let pos = introLen;
     for (let i = 0; i < shots.length; i++) {
       all.set(pcms[i], pos);
       const start = pos / SAMPLE_RATE;
@@ -255,7 +296,13 @@ export async function narratePart(
       timed.push({ n: shots[i].n, start, end: pos / SAMPLE_RATE });
       cues.push(...shotCues(texts[i], spoken[i].words, start, speechLen));
     }
-    const result: Narration = { audioPath: wavPath, duration: total / SAMPLE_RATE, shots: timed, cues };
+    const result: Narration = {
+      audioPath: wavPath,
+      duration: total / SAMPLE_RATE,
+      shots: timed,
+      cues,
+      ...(introLen ? { intro: { end: introLen / SAMPLE_RATE } } : {}),
+    };
     await fs.writeFile(wavPath + ".tmp", wavFile(all, SAMPLE_RATE));
     await fs.rename(wavPath + ".tmp", wavPath);
     await fs.writeFile(jsonPath, JSON.stringify(result));
