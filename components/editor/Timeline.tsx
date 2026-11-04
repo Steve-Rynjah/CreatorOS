@@ -280,15 +280,21 @@ export function Timeline({ height }: { height: number }) {
             {/* Intro region before the first image */}
             {offset > 0 && (
               p.chapter ? (
-                <div
-                  className="absolute rounded-md bg-[#1B1B1B] ring-1 ring-[#FFD23F]/40 flex flex-col items-center justify-center gap-0.5 px-2 overflow-hidden pointer-events-none text-center"
+                <button
+                  type="button"
+                  title="Title card — click to edit its font, size and colours"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={() => select("chapter", "chapter")}
+                  className={`absolute rounded-md bg-[#1B1B1B] flex flex-col items-center justify-center gap-0.5 px-2 overflow-hidden text-center cursor-pointer hover:ring-[#FFD23F] ${
+                    sel.kind === "chapter" ? "ring-2 ring-fg" : "ring-1 ring-[#FFD23F]/40"
+                  }`}
                   style={{ top: top.image + 4, height: clipH, left: 0, width: offset * scale - 2 }}
                 >
                   {p.chapter.label && offset * scale > 50 && (
                     <span className="text-[9px] font-bold uppercase tracking-[0.2em] text-[#FFD23F]">{p.chapter.label}</span>
                   )}
                   {offset * scale > 40 && <span className="text-[11px] font-semibold text-white truncate max-w-full">{p.chapter.title}</span>}
-                </div>
+                </button>
               ) : (
                 <div
                   className="absolute rounded-md border border-dashed border-line-strong text-[10px] text-subtle flex items-center justify-center overflow-hidden pointer-events-none"
@@ -355,21 +361,29 @@ export function Timeline({ height }: { height: number }) {
             })}
 
             {/* Cut points between clips (like DaVinci): click to pick a transition, or drop one here */}
-            {p.images.map((c, i) => {
-              if (i === 0) return null;
-              const x = clipStart(p, i) * scale;
+            {[...p.images, null].map((c, i) => {
+              // Index n is the end of the part (fade-out); 0 is the start (fade-in), unless the title card leads in.
+              const isEnd = c === null;
+              if (i === 0 && p.chapter) return null;
+              const n = p.images.length;
+              const x = (isEnd ? clipStart(p, n - 1) + clipDur(p, n - 1) : clipStart(p, i)) * scale;
               if (x < scrollLeft - 200 || x > scrollLeft + viewW + 200) return null;
-              const has = c.transition !== "none";
-              const w = has ? Math.max(20, Math.min(clipDur(p, i) * scale, c.transitionDur * scale)) : 26;
+              const has = isEnd ? (p.outro ?? 0) > 0 : c.transition !== "none";
+              const tDur = isEnd ? (p.outro ?? 0) : c.transitionDur;
+              const span = Math.max(20, Math.min(clipDur(p, isEnd ? n - 1 : i) * scale, tDur * scale));
+              // Start/end transitions sit inside the clip (fading from/to black); cuts straddle the boundary.
+              const w = has ? span : 26;
+              const left = !has ? x - w / 2 : isEnd ? x - w : i === 0 ? x : x - w / 2;
+              const label = isEnd ? "Fade out" : i === 0 ? "Fade in" : TRANSITION_LABEL[c.transition];
               const active = cutMenu === i || dropCut === i;
               return (
                 <button
-                  key={`cut-${c.id}`}
+                  key={`cut-${c?.id ?? "end"}`}
                   type="button"
                   className={`group absolute z-20 flex items-center justify-center ${
                     has ? `rounded-md border-2 bg-black/25 ${active ? "border-link" : "border-white/80 hover:border-link"}` : ""
                   }`}
-                  style={{ top: top.image + 4, height: clipH, left: x - w / 2, width: w }}
+                  style={{ top: top.image + 4, height: clipH, left, width: w }}
                   onPointerDown={(e) => e.stopPropagation()}
                   onClick={() => setCutMenu(cutMenu === i ? null : i)}
                   onDragOver={(e) => {
@@ -387,12 +401,18 @@ export function Timeline({ height }: { height: number }) {
                     const raw = e.dataTransfer.getData(DRAG_MIME);
                     if (!raw) return;
                     const preset = JSON.parse(raw) as PresetDrag;
-                    if (preset.kind === "transition") applyPreset([c.id], preset, has ? c.transitionDur : lastDur);
+                    if (preset.kind !== "transition") return;
+                    if (isEnd) updateProject((s) => ({ ...s, outro: preset.value === "none" ? 0 : has ? tDur : lastDur }));
+                    else applyPreset([c.id], preset, has ? c.transitionDur : lastDur);
                   }}
                   title={
                     has
-                      ? `${TRANSITION_LABEL[c.transition]} ${c.transitionDur.toFixed(1)}s — click to change`
-                      : `Add a transition between ${p.images[i - 1].name} and ${c.name}`
+                      ? `${label} ${tDur.toFixed(1)}s — click to change`
+                      : isEnd
+                        ? "Add a fade-out at the end (joins smoothly with the next part)"
+                        : i === 0
+                          ? `Add a fade-in to ${c.name}`
+                          : `Add a transition between ${p.images[i - 1].name} and ${c.name}`
                   }
                 >
                   {has ? (
@@ -402,9 +422,7 @@ export function Timeline({ height }: { height: number }) {
                         <line x1="50" y1="0" x2="50" y2="100" stroke="rgba(62,166,255,0.9)" strokeWidth="2" vectorEffect="non-scaling-stroke" />
                       </svg>
                       {w > 70 && clipH > 50 && (
-                        <span className="relative mt-auto mb-1 text-[10px] font-medium px-1 rounded bg-black/70 text-white">
-                          {TRANSITION_LABEL[c.transition]}
-                        </span>
+                        <span className="relative mt-auto mb-1 text-[10px] font-medium px-1 rounded bg-black/70 text-white">{label}</span>
                       )}
                     </>
                   ) : (
@@ -470,14 +488,14 @@ export function Timeline({ height }: { height: number }) {
             ))}
             <Waveform p={p} scale={scale} scrollLeft={scrollLeft} width={viewW} top={top.audio + 4} />
 
-            <Playhead scale={scale} height={contentH} />
+            <Playhead scale={scale} height={contentH} onDrag={scrub} />
           </div>
         </div>
       </div>
-      {cutMenu !== null && p.images[cutMenu] && (
+      {cutMenu !== null && cutMenu <= p.images.length && p.images.length > 0 && (
         <CutMenu
           index={cutMenu}
-          left={LABEL_W + clipStart(p, cutMenu) * scale - scrollLeft}
+          left={LABEL_W + (cutMenu === p.images.length ? imagesEnd(p) : clipStart(p, cutMenu)) * scale - scrollLeft}
           bottom={contentH + HEADER_H - top.image - 4}
           onDur={setLastDur}
           lastDur={lastDur}
@@ -523,12 +541,22 @@ function ClipBlock({
   );
 }
 
-function Playhead({ scale, height }: { scale: number; height: number }) {
+/** Blue playhead; grab the head or the line to scrub (the ↔ cursor shows it can be dragged). */
+function Playhead({ scale, height, onDrag }: { scale: number; height: number; onDrag: (e: React.PointerEvent) => void }) {
   const t = useStore(timeStore, (x) => x);
   return (
-    <div className="absolute top-0 pointer-events-none z-20" style={{ left: t * scale, height }}>
-      <div className="absolute -left-[5px] top-0 w-[11px] h-3 bg-accent rounded-b-sm" />
-      <div className="absolute left-0 top-0 w-px h-full bg-accent" />
+    <div className="absolute top-0 pointer-events-none z-30" style={{ left: t * scale, height }}>
+      <div
+        className="group absolute -left-[5px] top-0 w-[11px] h-full pointer-events-auto cursor-col-resize touch-none"
+        onPointerDown={(e) => {
+          e.stopPropagation();
+          if (e.button === 0) onDrag(e);
+        }}
+        title="Drag to scrub"
+      >
+        <div className="absolute left-0 top-0 w-[11px] h-3 bg-accent rounded-b-sm transition-transform group-hover:scale-x-125" />
+        <div className="absolute left-[5px] top-0 w-px h-full bg-accent group-hover:w-[2px] group-hover:left-[4.5px]" />
+      </div>
     </div>
   );
 }
@@ -581,10 +609,14 @@ function CutMenu({
 }) {
   const p = useStore(projectStore, (s) => s)!;
   const ref = useRef<HTMLDivElement>(null);
-  const clip = p.images[index];
-  const prev = p.images[index - 1];
-  const has = clip.transition !== "none";
-  const dur = has ? clip.transitionDur : lastDur;
+  const isEnd = index === p.images.length;
+  const clip = isEnd ? null : p.images[index];
+  const prev = index > 0 ? p.images[index - 1] : null;
+  const current: Transition = clip ? clip.transition : (p.outro ?? 0) > 0 ? "dissolve" : "none";
+  const has = current !== "none";
+  const dur = has ? (clip ? clip.transitionDur : p.outro!) : lastDur;
+  // To/from black only a cut or a dissolve makes sense.
+  const options = clip && prev ? TRANSITIONS : TRANSITIONS.filter((t) => t.value === "none" || t.value === "dissolve");
 
   useEffect(() => {
     const down = (e: PointerEvent) => {
@@ -601,10 +633,11 @@ function CutMenu({
   }, [onClose]);
 
   const set = (transition: Transition, transitionDur = dur) =>
-    updateProject((s) => ({
-      ...s,
-      images: s.images.map((c) => (c.id === clip.id ? { ...c, transition, transitionDur } : c)),
-    }));
+    updateProject((s) =>
+      clip
+        ? { ...s, images: s.images.map((c) => (c.id === clip.id ? { ...c, transition, transitionDur } : c)) }
+        : { ...s, outro: transition === "none" ? 0 : transitionDur },
+    );
   const strip = (n: string) => n.replace(/\.[^.]+$/, "");
   const W = 248;
 
@@ -616,19 +649,31 @@ function CutMenu({
     >
       <div className="flex items-center justify-between text-xs">
         <span className="text-muted">
-          Transition <b className="text-fg">{strip(prev.name)}</b> → <b className="text-fg">{strip(clip.name)}</b>
+          {clip && prev ? (
+            <>
+              Transition <b className="text-fg">{strip(prev.name)}</b> → <b className="text-fg">{strip(clip.name)}</b>
+            </>
+          ) : clip ? (
+            <>
+              Fade in from black → <b className="text-fg">{strip(clip.name)}</b>
+            </>
+          ) : (
+            <>
+              Fade out → <b className="text-fg">next part</b>
+            </>
+          )}
         </span>
         <button className="text-muted hover:text-fg px-1" onClick={onClose} aria-label="Close">
           ×
         </button>
       </div>
       <div className="grid grid-cols-2 gap-1.5">
-        {TRANSITIONS.map((t) => (
+        {options.map((t) => (
           <button
             key={t.value}
             onClick={() => set(t.value)}
             className={`h-8 rounded-lg text-xs font-medium transition-colors ${
-              clip.transition === t.value ? "bg-fg text-bg" : "bg-chip hover:bg-hover"
+              current === t.value ? "bg-fg text-bg" : "bg-chip hover:bg-hover"
             }`}
           >
             {t.label}
@@ -649,20 +694,19 @@ function CutMenu({
           onChange={(e) => {
             const v = Number(e.target.value);
             onDur(v);
-            if (has) set(clip.transition, v);
+            if (has) set(current, v);
           }}
           className="w-full"
         />
       </div>
-      {has && (
+      {!clip && <p className="text-[11px] text-muted">Fades this part to black so it dissolves into the next part when merged.</p>}
+      {has && clip && prev && (
         <button
           className="w-full h-7 rounded-lg text-xs bg-chip hover:bg-hover"
           onClick={() =>
             updateProject((s) => ({
               ...s,
-              images: s.images.map((c, i) =>
-                i === 0 ? c : { ...c, transition: clip.transition, transitionDur: clip.transitionDur },
-              ),
+              images: s.images.map((c, i) => (i === 0 ? c : { ...c, transition: clip.transition, transitionDur: clip.transitionDur })),
             }))
           }
         >

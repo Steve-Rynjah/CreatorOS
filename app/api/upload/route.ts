@@ -3,10 +3,10 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { AUDIO_EXT, CACHE_DIR, ensureDir } from "@/lib/server/fsutil";
+import { AUDIO_EXT, CACHE_DIR, VIDEO_EXT, ensureDir } from "@/lib/server/fsutil";
 
 /**
- * Stores a voice-over file dropped/pasted in the browser. The stored path is stable for the
+ * Stores a voice-over (or, with ?kind=video, a video part) dropped/pasted in the browser. The stored path is stable for the
  * same file (name + size + modified time), so saved edits are restored when it's added again.
  */
 export async function POST(req: Request) {
@@ -15,8 +15,10 @@ export async function POST(req: Request) {
   const size = url.searchParams.get("size") || "";
   const modified = url.searchParams.get("modified") || "";
   const ext = path.extname(name).toLowerCase();
-  if (!name || !AUDIO_EXT.includes(ext)) {
-    return Response.json({ error: `Unsupported audio file. Use ${AUDIO_EXT.join(", ")}` }, { status: 400 });
+  const video = url.searchParams.get("kind") === "video";
+  const allowed = video ? VIDEO_EXT : AUDIO_EXT;
+  if (!name || !allowed.includes(ext)) {
+    return Response.json({ error: `Unsupported ${video ? "video" : "audio"} file. Use ${allowed.join(", ")}` }, { status: 400 });
   }
   if (!req.body) return Response.json({ error: "Empty upload" }, { status: 400 });
 

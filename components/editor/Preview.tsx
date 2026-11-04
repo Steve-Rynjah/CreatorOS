@@ -12,6 +12,31 @@ import {
   useStore,
 } from "@/lib/editor/store";
 import { clipIndexAt, clipStart, formatTime, totalDuration } from "@/lib/editor/timing";
+import { textRotation, type TextClip } from "@/lib/editor/types";
+
+/** CSS px around a text's edge where dragging rotates instead of moves. */
+const EDGE_PX = 12;
+
+/** Circular-arrow "rotate" cursor (white with a dark outline), hotspot in the middle. */
+const ROTATE_CURSOR = (() => {
+  const arrow =
+    "<path d='M19 12a7 7 0 1 1-2.05-4.95' fill='none' stroke-linecap='round' stroke-width='STROKE' stroke='COLOR'/>" +
+    "<path d='M20.5 3.5v5h-5' fill='none' stroke-linecap='round' stroke-linejoin='round' stroke-width='STROKE' stroke='COLOR'/>";
+  const svg =
+    "<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'>" +
+    arrow.replaceAll("STROKE", "4.5").replaceAll("COLOR", "black") +
+    arrow.replaceAll("STROKE", "2").replaceAll("COLOR", "white") +
+    "</svg>";
+  return `url("data:image/svg+xml,${encodeURIComponent(svg)}") 12 12, alias`;
+})();
+
+function sameBoxes(a: TextBox[], b: TextBox[]) {
+  const r = (n: number) => Math.round(n);
+  return (
+    a.length === b.length &&
+    a.every((x, i) => x.id === b[i].id && r(x.x) === r(b[i].x) && r(x.y) === r(b[i].y) && r(x.w) === r(b[i].w) && r(x.h) === r(b[i].h) && Math.abs(x.rot - b[i].rot) < 1e-3)
+  );
+}
 
 export function Preview({ assets }: { assets: Assets }) {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -45,6 +70,10 @@ export function Preview({ assets }: { assets: Assets }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const boxesRef = useRef<TextBox[]>([]);
   const [size, setSize] = useState({ w: 640, h: 360 });
+  const [hoverBox, setHoverBox] = useState<{ id: string; mode: "move" | "rotate" } | null>(null);
+  const [rotating, setRotating] = useState<{ id: string; deg: number } | null>(null);
+  /** Text boxes in CSS px, for placing the angle readout. */
+  const [overlayBoxes, setOverlayBoxes] = useState<TextBox[]>([]);
 
   // Fit a 16:9 canvas into the available area.
   useEffect(() => {
@@ -72,7 +101,10 @@ export function Preview({ assets }: { assets: Assets }) {
       raf = 0;
       const p = projectStore.get();
       if (!p) return;
-      boxesRef.current = renderFrame(ctx, W, H, timeStore.get(), p, assets);
+      const boxes = renderFrame(ctx, W, H, timeStore.get(), p, assets);
+      boxesRef.current = boxes;
+      const css = boxes.map((b) => ({ ...b, x: b.x / (W / size.w), y: b.y / (W / size.w), w: b.w / (W / size.w), h: b.h / (W / size.w) }));
+      setOverlayBoxes((prev) => (sameBoxes(prev, css) ? prev : css));
     };
     const schedule = () => {
       if (!raf) raf = requestAnimationFrame(draw);
@@ -85,54 +117,136 @@ export function Preview({ assets }: { assets: Assets }) {
     };
   }, [size, assets]);
 
-  // Drag on-screen text to reposition it.
-  function onPointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
+
+  /** Canvas px per CSS px, and the pointer in canvas px. */
+  function toCanvas(e: { clientX: number; clientY: number }) {
     const canvas = canvasRef.current!;
     const rect = canvas.getBoundingClientRect();
-    const sx = canvas.width / rect.width;
-    const px = (e.clientX - rect.left) * sx;
-    const py = (e.clientY - rect.top) * sx;
-    const hit = [...boxesRef.current].reverse().find((b) => px >= b.x && px <= b.x + b.w && py >= b.y && py <= b.y + b.h);
+    const k = canvas.width / rect.width;
+    return { k, rect, px: (e.clientX - rect.left) * k, py: (e.clientY - rect.top) * k };
+  }
+
+  /** Topmost text under the pointer: inside → move; on the edge band (inside or just outside) → rotate. */
+  function hitTest(e: { clientX: number; clientY: number }) {
+    const { k, px, py } = toCanvas(e);
+    const band = EDGE_PX * k;
+    for (const b of [...boxesRef.current].reverse()) {
+      const cx = b.x + b.w / 2;
+      const cy = b.y + b.h / 2;
+      const c = Math.cos(-b.rot);
+      const sn = Math.sin(-b.rot);
+      const lx = Math.abs((px - cx) * c - (py - cy) * sn);
+      const ly = Math.abs((px - cx) * sn + (py - cy) * c);
+      const hw = b.w / 2;
+      const hh = b.h / 2;
+      if (lx > hw + band || ly > hh + band) continue;
+      const inner = Math.min(band * 0.6, hw * 0.3, hh * 0.3);
+      const mode: "move" | "rotate" = lx <= hw - inner && ly <= hh - inner ? "move" : "rotate";
+      return { box: b, mode };
+    }
+    return null;
+  }
+
+  function onPointerMove(e: React.PointerEvent<HTMLCanvasElement>) {
+    if (e.buttons) return;
+    const hit = hitTest(e);
+    const next = hit ? { id: hit.box.id, mode: hit.mode } : null;
+    setHoverBox((h) => (h?.id === next?.id && h?.mode === next?.mode ? h : next));
+  }
+
+  // Drag inside on-screen text to move it; drag its edge to rotate it.
+  function onPointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
+    if (e.button !== 0) return;
+    const canvas = canvasRef.current!;
+    const hit = hitTest(e);
     if (!hit) return;
-    select("text", hit.id);
+    const { box } = hit;
+    const { rect, k } = toCanvas(e);
+    select("text", box.id);
     const p = projectStore.get()!;
-    const t = p.texts.find((x) => x.id === hit.id)!;
-    const start = { x: e.clientX, y: e.clientY, tx: t.x, ty: t.y };
+    const t = p.texts.find((x) => x.id === box.id)!;
+    const set = (patch: Partial<TextClip>) =>
+      updateProject((s) => ({ ...s, texts: s.texts.map((x) => (x.id === box.id ? { ...x, ...patch } : x)) }), { record: false });
     let moved = false;
     canvas.setPointerCapture(e.pointerId);
-    const move = (ev: PointerEvent) => {
-      const dx = (ev.clientX - start.x) / rect.width;
-      const dy = (ev.clientY - start.y) / rect.height;
-      if (!moved && Math.abs(dx) + Math.abs(dy) < 0.003) return;
-      if (!moved) checkpoint();
-      moved = true;
-      // Snap to horizontal / vertical center.
-      let nx = Math.max(0, Math.min(1, start.tx + dx));
-      let ny = Math.max(0, Math.min(1, start.ty + dy));
-      if (Math.abs(nx - 0.5) < 0.015) nx = 0.5;
-      if (Math.abs(ny - 0.5) < 0.015) ny = 0.5;
-      updateProject(
-        (s) => ({ ...s, texts: s.texts.map((x) => (x.id === hit.id ? { ...x, x: nx, y: ny } : x)) }),
-        { record: false },
-      );
-    };
+
+    let move: (ev: PointerEvent) => void;
+    if (hit.mode === "rotate") {
+      // Rotate about the box centre, following the pointer's angle.
+      const cx = rect.left + (box.x + box.w / 2) / k;
+      const cy = rect.top + (box.y + box.h / 2) / k;
+      const a0 = Math.atan2(e.clientY - cy, e.clientX - cx);
+      const r0 = textRotation(t);
+      setRotating({ id: box.id, deg: r0 });
+      move = (ev) => {
+        let deg = r0 + ((Math.atan2(ev.clientY - cy, ev.clientX - cx) - a0) * 180) / Math.PI;
+        deg = ((((deg + 180) % 360) + 360) % 360) - 180;
+        if (ev.shiftKey) deg = Math.round(deg / 15) * 15;
+        else {
+          const snap = Math.round(deg / 45) * 45;
+          deg = Math.abs(deg - snap) < 3 ? snap : Math.round(deg);
+        }
+        if (deg === -180) deg = 180;
+        if (!moved) checkpoint();
+        moved = true;
+        setRotating({ id: box.id, deg });
+        set({ rotation: deg });
+      };
+    } else {
+      const start = { x: e.clientX, y: e.clientY, tx: t.x, ty: t.y };
+      move = (ev) => {
+        const dx = (ev.clientX - start.x) / rect.width;
+        const dy = (ev.clientY - start.y) / rect.height;
+        if (!moved && Math.abs(dx) + Math.abs(dy) < 0.003) return;
+        if (!moved) checkpoint();
+        moved = true;
+        // Snap to horizontal / vertical center.
+        let nx = Math.max(0, Math.min(1, start.tx + dx));
+        let ny = Math.max(0, Math.min(1, start.ty + dy));
+        if (Math.abs(nx - 0.5) < 0.015) nx = 0.5;
+        if (Math.abs(ny - 0.5) < 0.015) ny = 0.5;
+        set({ x: nx, y: ny });
+      };
+    }
     const up = () => {
+      setRotating(null);
       canvas.removeEventListener("pointermove", move);
       canvas.removeEventListener("pointerup", up);
+      canvas.removeEventListener("pointercancel", up);
     };
     canvas.addEventListener("pointermove", move);
     canvas.addEventListener("pointerup", up);
+    canvas.addEventListener("pointercancel", up);
   }
+
+  const cursor = rotating ? ROTATE_CURSOR : hoverBox ? (hoverBox.mode === "rotate" ? ROTATE_CURSOR : "move") : "default";
 
   return (
     <div ref={rootRef} className={max ? "fixed inset-0 z-[80] flex flex-col bg-black" : "flex-1 min-w-0 flex flex-col bg-surface"}>
       <div ref={wrapRef} className="relative flex-1 min-h-0 grid place-items-center">
-        <canvas
-          ref={canvasRef}
-          onPointerDown={onPointerDown}
-          style={{ width: size.w, height: size.h }}
-          className={`bg-black ${max ? "" : "rounded-lg shadow-[0_0_0_1px_var(--line),0_20px_50px_-20px_rgba(0,0,0,0.8)]"}`}
-        />
+        <div className="relative" style={{ width: size.w, height: size.h }}>
+          <canvas
+            ref={canvasRef}
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerLeave={() => setHoverBox(null)}
+            style={{ width: size.w, height: size.h, cursor }}
+            className={`block bg-black touch-none ${max ? "" : "rounded-lg shadow-[0_0_0_1px_var(--line),0_20px_50px_-20px_rgba(0,0,0,0.8)]"}`}
+          />
+          {/* Only an angle readout while rotating — nothing is drawn over the text itself. */}
+          {rotating &&
+            overlayBoxes
+              .filter((b) => b.id === rotating.id)
+              .map((b) => (
+                <span
+                  key={b.id}
+                  className="absolute pointer-events-none -translate-x-1/2 -translate-y-full rounded-md bg-black/85 px-2 py-0.5 text-[11px] font-mono text-white whitespace-nowrap"
+                  style={{ left: b.x + b.w / 2, top: b.y + b.h / 2 - Math.hypot(b.w, b.h) / 2 - 6 }}
+                >
+                  {Math.round(rotating.deg)}°
+                </span>
+              ))}
+        </div>
         <button
           type="button"
           onClick={toggleMax}
@@ -256,7 +370,7 @@ function Scrubber({ total, time }: { total: number; time: number }) {
         onPointerDown={onDown}
         onPointerMove={(e) => setHover(at(e.clientX))}
         onPointerLeave={() => setHover(null)}
-        className="group relative h-4 flex items-center cursor-pointer select-none touch-none"
+        className="group relative h-4 flex items-center cursor-col-resize select-none touch-none"
       >
         {/* Sections */}
         <div className="absolute inset-x-0 h-1.5 group-hover:h-2 transition-[height] flex gap-[2px]">

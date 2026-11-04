@@ -5,7 +5,12 @@ export const outfit = Outfit({ subsets: ["latin"], variable: "--font-outfit" });
 
 export const roboto = Roboto({ subsets: ["latin"], weight: ["400", "500", "700", "900"], variable: "--font-roboto" });
 export const oswald = Oswald({ subsets: ["latin"], weight: ["400", "700"], variable: "--font-oswald" });
-export const montserrat = Montserrat({ subsets: ["latin"], weight: ["500", "700", "800"], variable: "--font-montserrat" });
+export const montserrat = Montserrat({
+  subsets: ["latin"],
+  weight: ["500", "700", "800", "900"],
+  style: ["normal", "italic"],
+  variable: "--font-montserrat",
+});
 export const bebas = Bebas_Neue({ subsets: ["latin"], weight: "400", variable: "--font-bebas" });
 
 export const fontVariables = [outfit, roboto, oswald, montserrat, bebas].map((f) => f.variable).join(" ");
@@ -32,6 +37,7 @@ export async function preloadCanvasFonts() {
       document.fonts.load(`400 40px ${f.family}`),
       document.fonts.load(`700 40px ${f.family}`),
       document.fonts.load(`800 40px ${f.family}`),
+      document.fonts.load(`italic 900 40px ${f.family}`),
     ]),
   ).catch(() => {});
 }

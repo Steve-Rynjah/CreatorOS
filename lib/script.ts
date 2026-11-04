@@ -31,7 +31,7 @@ export type ScriptPart = {
 /** "Part 1" + "Before the Billions"; label is null for an unnumbered chapter like the hook. */
 export type ScriptChapter = { label: string | null; title: string };
 
-export type ParsedScript = { file: string; pages: number; parts: ScriptPart[] };
+export type ParsedScript = { file: string; pages: number; parts: ScriptPart[]; /** The video title from the first page, when one was found. */ title?: string | null };
 
 export type NarratedShot = { n: number; start: number; end: number };
 export type NarrationCue = { start: number; end: number; text: string; words?: number[] };

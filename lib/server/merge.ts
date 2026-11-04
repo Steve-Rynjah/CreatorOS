@@ -16,6 +16,18 @@ export async function scanParts(dir: string) {
   return { parts: out, usedPrefix, ...compatibility(out) };
 }
 
+/** Probes hand-picked files (the Hook / V1… slots), keeping their order. */
+export async function probeFiles(paths: string[]): Promise<PartInfo[]> {
+  return Promise.all(
+    paths.map(async (p, i) => {
+      const ok = await fs.stat(p).then((s) => s.isFile(), () => false);
+      if (!ok) throw new Error(`File not found: ${p}`);
+      if (!VIDEO_EXT.includes(path.extname(p).toLowerCase())) throw new Error(`Not a video file: ${path.basename(p)}`);
+      return { name: path.basename(p).replace(/^[0-9a-f]{12}-/, ""), path: p, index: i + 1, info: await probe(p) };
+    }),
+  );
+}
+
 /** Parts can be joined losslessly (stream copy) only if every stream matches. */
 export function compatibility(parts: PartInfo[]): { canCopy: boolean; reason?: string } {
   if (parts.length < 2) return { canCopy: true };
@@ -110,4 +122,32 @@ export async function mergeParts(
     { duration: total, onProgress: (progress) => update({ progress }) },
   );
   return { output, mode: "reencode", duration: total };
+}
+
+/**
+ * Where someone is speaking in a video — everything that isn't a pause of at least
+ * `minPause` seconds below `noise`. Used to time script captions without transcription.
+ */
+export async function speechSpans(file: string, minPause = 0.25, noise = "-35dB"): Promise<{ duration: number; speech: [number, number][] }> {
+  const { duration } = await probe(file);
+  const { stderr } = await runFfmpeg(["-nostats", "-i", file, "-vn", "-af", `silencedetect=noise=${noise}:d=${minPause}`, "-f", "null", "-"]);
+  const pauses: [number, number][] = [];
+  let open: number | null = null;
+  for (const m of stderr.matchAll(/silence_(start|end):\s*(-?[\d.]+)/g)) {
+    const t = Math.max(0, Number(m[2]));
+    if (m[1] === "start") open = t;
+    else if (open !== null) {
+      pauses.push([open, t]);
+      open = null;
+    }
+  }
+  if (open !== null) pauses.push([open, duration]);
+  const speech: [number, number][] = [];
+  let t = 0;
+  for (const [a, b] of pauses) {
+    if (a - t > 0.05) speech.push([t, a]);
+    t = b;
+  }
+  if (duration - t > 0.05) speech.push([t, duration]);
+  return { duration, speech: speech.length ? speech : [[0, duration]] };
 }

@@ -5,7 +5,7 @@ import { player } from "@/lib/editor/player";
 import { projectStore, select, selectionStore, timeStore, updateProject, useStore } from "@/lib/editor/store";
 import { parseSrt, segmentsToCues, toSrt } from "@/lib/editor/subtitles";
 import { formatTime, uid } from "@/lib/editor/timing";
-import type { Cue } from "@/lib/editor/types";
+import { subtitleMargin, type Cue } from "@/lib/editor/types";
 import { Swatches, TimeField } from "./TextTab";
 
 const LANGUAGES = [
@@ -219,6 +219,24 @@ export function SubtitleTab() {
         <div>
           <Label hint={`${sub.size}px`}>Size</Label>
           <input type="range" min={24} max={110} value={sub.size} onChange={(e) => setStyle({ size: Number(e.target.value) })} className="w-full" />
+        </div>
+        <div>
+          <Label hint={`${subtitleMargin(sub)}% of the height`}>Gap from {sub.position === "bottom" ? "bottom" : "top"}</Label>
+          <div className="flex items-center gap-2">
+            <input
+              type="range"
+              min={1}
+              max={40}
+              step={1}
+              value={subtitleMargin(sub)}
+              onChange={(e) => setStyle({ margin: Number(e.target.value) })}
+              className="flex-1"
+              aria-label={`Gap from ${sub.position}`}
+            />
+            <Button size="sm" variant="ghost" disabled={sub.margin === undefined} onClick={() => setStyle({ margin: undefined })}>
+              Reset
+            </Button>
+          </div>
         </div>
       </section>
 

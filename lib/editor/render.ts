@@ -1,8 +1,10 @@
 import { fontFamily } from "@/lib/fonts";
-import { clipDur, clipIndexAt, clipStart } from "./timing";
-import { BRAND, textAnim, type Chapter, type Cue, type ImageClip, type Project, type TextClip } from "./types";
+import { clipDur, clipIndexAt, clipStart, totalDuration } from "./timing";
+import { drawText, setSpacing, wrapLines, type Ctx, type TextBox } from "./text";
+import { BRAND, CHAPTER_STYLE_DEFAULT, subtitleMargin, type Chapter, type Cue, type ImageClip, type Project } from "./types";
 
-type Ctx = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+export type { TextBox };
+
 type Drawable = HTMLImageElement | ImageBitmap | HTMLCanvasElement | OffscreenCanvas;
 
 export type Assets = {
@@ -12,16 +14,9 @@ export type Assets = {
   blurred: Map<string, Drawable>;
 };
 
-export type TextBox = { id: string; x: number; y: number; w: number; h: number };
-
 const easeInOut = (x: number) => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
 const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
 const easeOut = (x: number) => 1 - Math.pow(1 - x, 3);
-const easeOutBack = (x: number) => 1 + 2.2 * Math.pow(x - 1, 3) + 1.2 * Math.pow(x - 1, 2);
-
-function setSpacing(ctx: Ctx, px: number) {
-  if ("letterSpacing" in ctx) (ctx as { letterSpacing: string }).letterSpacing = `${px}px`;
-}
 
 function dims(img: Drawable) {
   if ("naturalWidth" in img) return { w: img.naturalWidth, h: img.naturalHeight };
@@ -82,101 +77,6 @@ function drawClipImage(
   ctx.imageSmoothingQuality = "high";
   ctx.drawImage(img, dx + (W - dw) / 2, (H - dh) / 2, dw, dh);
   ctx.restore();
-}
-
-function wrapLines(ctx: Ctx, text: string, maxWidth: number) {
-  const out: string[] = [];
-  for (const para of text.split("\n")) {
-    const words = para.split(/\s+/).filter(Boolean);
-    if (!words.length) {
-      out.push("");
-      continue;
-    }
-    let line = words[0];
-    for (const w of words.slice(1)) {
-      const test = `${line} ${w}`;
-      if (ctx.measureText(test).width > maxWidth) {
-        out.push(line);
-        line = w;
-      } else line = test;
-    }
-    out.push(line);
-  }
-  return out;
-}
-
-function drawText(ctx: Ctx, t: TextClip, W: number, H: number, time: number): TextBox | null {
-  const k = H / 1080;
-  const size = t.size * k;
-  const anim = textAnim(t);
-  // Legacy fade clips scaled their fade to the clip; new clips use the chosen duration.
-  const d = Math.max(0.05, Math.min(t.animDur ?? Math.min(0.4, t.duration / 3), t.duration / 2));
-  const inP = anim === "none" ? 1 : clamp01((time - t.start) / d);
-  const outP = anim === "none" ? 1 : clamp01((t.start + t.duration - time) / d);
-  const align = t.align ?? "center";
-
-  ctx.save();
-  ctx.font = `${t.bold ? 700 : 400} ${size}px ${fontFamily(t.font)}`;
-  ctx.textAlign = align;
-  ctx.textBaseline = "middle";
-  const lines = wrapLines(ctx, t.text || " ", W * 0.86);
-  const lh = size * 1.2;
-  const widths = lines.map((l) => ctx.measureText(l).width);
-  const bw = Math.max(...widths, size);
-  const bh = lh * lines.length;
-  const ax = t.x * W;
-  const cy = t.y * H;
-  const padX = size * 0.45;
-  const padY = size * 0.25;
-  const left = align === "left" ? ax : align === "right" ? ax - bw : ax - bw / 2;
-  const box = { id: t.id, x: left - padX, y: cy - bh / 2 - padY, w: bw + padX * 2, h: bh + padY * 2 };
-
-  // In-animation (out is always a fade unless "none").
-  let alpha = Math.min(inP, outP);
-  let dx = 0;
-  let dy = 0;
-  let scale = 1;
-  let reveal = 1;
-  const e = easeOut(inP);
-  if (anim === "pop") scale = 0.6 + 0.4 * easeOutBack(inP);
-  else if (anim === "slide-up") dy = (1 - e) * size * 0.9;
-  else if (anim === "slide-down") dy = -(1 - e) * size * 0.9;
-  else if (anim === "slide-in") dx = (align === "right" ? 1 : -1) * (1 - e) * W * 0.06;
-  else if (anim === "typewriter") {
-    reveal = inP;
-    alpha = outP;
-  }
-  ctx.globalAlpha = alpha;
-  const cx = box.x + box.w / 2;
-  ctx.translate(cx + dx, cy + dy);
-  ctx.scale(scale, scale);
-  ctx.translate(-cx, -cy);
-
-  if (t.background) {
-    ctx.fillStyle = t.bgColor;
-    ctx.beginPath();
-    ctx.roundRect(box.x, box.y, box.w, box.h, size * 0.18);
-    ctx.fill();
-  } else {
-    ctx.shadowColor = "rgba(0,0,0,0.75)";
-    ctx.shadowBlur = size * 0.18;
-    ctx.shadowOffsetY = size * 0.04;
-  }
-  ctx.fillStyle = t.color;
-  const total = lines.reduce((n, l) => n + l.length, 0);
-  let budget = Math.ceil(total * reveal);
-  lines.forEach((l, i) => {
-    if (budget <= 0) return;
-    const shown = l.slice(0, budget);
-    budget -= l.length;
-    // Typewriter keeps the line's final position: draw the prefix from the line's start edge.
-    const lx = align === "center" && shown.length < l.length ? ax - widths[i] / 2 : ax;
-    if (align === "center" && shown.length < l.length) ctx.textAlign = "left";
-    ctx.fillText(shown, lx, cy - bh / 2 + lh * (i + 0.5));
-    ctx.textAlign = align;
-  });
-  ctx.restore();
-  return box;
 }
 
 /** Start time of each word: the voice's own timings when they still fit the text, else shared out by length. */
@@ -265,7 +165,8 @@ function drawModernSubtitle(ctx: Ctx, p: Project, cue: Cue, W: number, H: number
   });
   const lh = size * 1.18;
   const blockH = lh * lines.length;
-  const cy = p.subtitle.position === "bottom" ? H * 0.86 - blockH / 2 : H * 0.12 + blockH / 2;
+  const gap = (H * subtitleMargin(p.subtitle)) / 100;
+  const cy = p.subtitle.position === "bottom" ? H - gap - blockH / 2 : gap + blockH / 2;
   const enter = easeOut(clamp01((time - pageStart) / 0.14));
   ctx.globalAlpha = enter;
   const rise = (1 - enter) * size * 0.25;
@@ -307,14 +208,18 @@ function drawModernSubtitle(ctx: Ctx, p: Project, cue: Cue, W: number, H: number
   ctx.restore();
 }
 
-/** Seconds the title card takes to dissolve into the first shot (centred on the cut). */
-export const CHAPTER_FADE = 0.9;
+/** Seconds the title card takes to dissolve into the first shot; it's gone by the cut, before the first subtitle. */
+export const CHAPTER_FADE = 0.6;
+/** Seconds the title text takes to dissolve away, ending as the card starts to fade. */
+const CHAPTER_TEXT_OUT = 0.55;
 
 /** Movie-style chapter card: letterboxed, the first shot blurred behind, label + title animating in. */
 function drawChapter(ctx: Ctx, ch: Chapter, first: ImageClip | undefined, assets: Assets, W: number, H: number, time: number) {
   const D = ch.duration;
   const k = H / 1080;
   ctx.save();
+  // Card opacity set by the caller (its dissolve into the first shot); everything below scales by it.
+  const base = ctx.globalAlpha;
   ctx.fillStyle = BRAND.black;
   ctx.fillRect(0, 0, W, H);
 
@@ -322,10 +227,10 @@ function drawChapter(ctx: Ctx, ch: Chapter, first: ImageClip | undefined, assets
   const bg = first && assets.blurred.get(first.path);
   if (bg) {
     const z = 1.12 + 0.06 * clamp01(time / Math.max(1, D));
-    ctx.globalAlpha = 0.55;
+    ctx.globalAlpha = base * 0.55;
     ctx.imageSmoothingQuality = "high";
     ctx.drawImage(bg, (W - W * z) / 2, (H - H * z) / 2, W * z, H * z);
-    ctx.globalAlpha = 1;
+    ctx.globalAlpha = base;
   }
   const vg = ctx.createRadialGradient(W / 2, H / 2, H * 0.2, W / 2, H / 2, W * 0.7);
   vg.addColorStop(0, "rgba(27,27,27,0.55)");
@@ -339,15 +244,31 @@ function drawChapter(ctx: Ctx, ch: Chapter, first: ImageClip | undefined, assets
   ctx.fillRect(0, 0, W, bar);
   ctx.fillRect(0, H - bar, W, bar);
 
+  // Title text dissolves (fade + blur + slight push) before the card itself fades out.
+  const out = easeInOut(clamp01((time - (D - CHAPTER_FADE - CHAPTER_TEXT_OUT)) / CHAPTER_TEXT_OUT));
+  if (out >= 1) {
+    ctx.restore();
+    return;
+  }
+  const textA = base * (1 - out);
+  ctx.globalAlpha = textA;
+  if (out > 0 && "filter" in ctx) ctx.filter = `blur(${(out * 14 * k).toFixed(2)}px)`;
+  if (out > 0) {
+    ctx.translate(W / 2, H / 2);
+    ctx.scale(1 + 0.06 * out, 1 + 0.06 * out);
+    ctx.translate(-W / 2, -H / 2);
+  }
+
+  const st = { ...CHAPTER_STYLE_DEFAULT, ...ch.style };
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  const titleSize = 150 * k;
-  ctx.font = `400 ${titleSize}px ${fontFamily("bebas")}`;
+  const titleSize = st.size * k;
+  ctx.font = `${st.font === "bebas" ? 400 : 800} ${titleSize}px ${fontFamily(st.font)}`;
   // Fixed spacing: animating it re-wrapped and shifted the title while it came in.
   setSpacing(ctx, titleSize * 0.03);
   const tIn = easeOut(clamp01((time - 0.3) / 0.9));
-  const lines = wrapLines(ctx, ch.title.toUpperCase(), W * 0.8);
-  const lh = titleSize * 1.02;
+  const lines = wrapLines(ctx, st.uppercase ? ch.title.toUpperCase() : ch.title, W * 0.8);
+  const lh = titleSize * (st.font === "bebas" ? 1.02 : 1.15);
   const blockH = lh * lines.length;
   const labelSize = 34 * k;
   const gapY = 44 * k;
@@ -356,20 +277,20 @@ function drawChapter(ctx: Ctx, ch: Chapter, first: ImageClip | undefined, assets
   if (ch.label) {
     const lIn = easeOut(clamp01((time - 0.1) / 0.6));
     ctx.save();
-    ctx.globalAlpha = lIn;
+    ctx.globalAlpha = textA * lIn;
     ctx.font = `800 ${labelSize}px ${fontFamily("montserrat")}`;
     setSpacing(ctx, labelSize * 0.45);
-    ctx.fillStyle = BRAND.yellow;
+    ctx.fillStyle = st.accent;
     ctx.fillText(ch.label.toUpperCase(), W / 2 + labelSize * 0.22, top + labelSize / 2 + (1 - lIn) * 12 * k);
     ctx.restore();
     // Rule under the label grows from the centre.
     const rw = 120 * k * easeOut(clamp01((time - 0.25) / 0.7));
-    ctx.fillStyle = BRAND.yellow;
+    ctx.fillStyle = st.accent;
     ctx.fillRect(W / 2 - rw / 2, top + labelSize + gapY / 2 - 2 * k, rw, 4 * k);
   }
 
-  ctx.globalAlpha = tIn;
-  ctx.fillStyle = BRAND.white;
+  ctx.globalAlpha = textA * tIn;
+  ctx.fillStyle = st.color;
   ctx.shadowColor = "rgba(0,0,0,0.6)";
   ctx.shadowBlur = 30 * k;
   ctx.textAlign = "left";
@@ -398,7 +319,8 @@ function drawSubtitle(ctx: Ctx, p: Project, W: number, H: number, time: number) 
   const lines = wrapLines(ctx, cue.text, W * 0.8);
   const lh = size * 1.35;
   const blockH = lh * lines.length;
-  const y0 = p.subtitle.position === "bottom" ? H * 0.92 - blockH : H * 0.08;
+  const gap = (H * subtitleMargin(p.subtitle)) / 100;
+  const y0 = p.subtitle.position === "bottom" ? H - gap - blockH : gap;
   lines.forEach((l, i) => {
     const y = y0 + lh * (i + 0.5);
     if (p.subtitle.box) {
@@ -454,9 +376,11 @@ export function renderFrame(
       const T = trDur(b);
       if (!T) continue;
       const s = clipStart(p, b);
-      if (time < s - T / 2 || time >= s + T / 2) continue;
-      if (b === 0 && p.introFill === "first") break;
-      const a = clamp01((time - (s - T / 2)) / T);
+      // The first shot fades up from black starting at its cut (the title card has its own dissolve).
+      const from = b === 0 ? s : s - T / 2;
+      if (time < from || time >= from + T) continue;
+      if (b === 0 && (p.introFill === "first" || p.chapter)) break;
+      const a = clamp01((time - from) / T);
       const clip = p.images[b];
       const drawPrev = (dx: number) => {
         if (b > 0) drawClipImage(ctx, p, assets, p.images[b - 1], W, H, motion(b - 1), dx, 1);
@@ -485,9 +409,9 @@ export function renderFrame(
 
   // Chapter title card, dissolving into the first shot around the cut.
   const ch = p.chapter;
-  if (ch && time < ch.duration + CHAPTER_FADE / 2) {
-    const a = clamp01((time - (ch.duration - CHAPTER_FADE / 2)) / CHAPTER_FADE);
-    if (a > 0 && time < ch.duration && p.images[0]) drawClipImage(ctx, p, assets, p.images[0], W, H, 0, 0, 1);
+  if (ch && time < ch.duration) {
+    const a = clamp01((time - (ch.duration - CHAPTER_FADE)) / CHAPTER_FADE);
+    if (a > 0 && p.images[0]) drawClipImage(ctx, p, assets, p.images[0], W, H, 0, 0, 1);
     ctx.save();
     ctx.globalAlpha = 1 - easeInOut(a);
     drawChapter(ctx, ch, p.images[0], assets, W, H, time);
@@ -497,11 +421,24 @@ export function renderFrame(
   const boxes: TextBox[] = [];
   for (const t of p.texts) {
     if (time >= t.start && time < t.start + t.duration) {
-      const b = drawText(ctx, t, W, H, time);
-      if (b) boxes.push(b);
+      boxes.push(drawText(ctx, t, W, H, time));
     }
   }
-  if (opts.subtitles ?? p.subtitle.enabled) drawSubtitle(ctx, p, W, H, time);
+  // Subtitles wait until the title card has fully dissolved.
+  if ((opts.subtitles ?? p.subtitle.enabled) && !(ch && time < ch.duration)) drawSubtitle(ctx, p, W, H, time);
+
+  // Fade to black at the very end, so this part dissolves into the next one when they're merged.
+  const outro = p.outro ?? 0;
+  if (outro > 0) {
+    const end = totalDuration(p);
+    const a = clamp01((time - (end - outro)) / outro);
+    if (a > 0) {
+      ctx.globalAlpha = easeInOut(a);
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0, 0, W, H);
+      ctx.globalAlpha = 1;
+    }
+  }
   ctx.restore();
   return boxes;
 }

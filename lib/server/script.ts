@@ -194,3 +194,33 @@ function span(times: string[]): string | null {
   if (a.length !== 2 || b.length !== 2) return times.join(", ");
   return `${a[0]}–${b[1]}`;
 }
+
+/**
+ * The video's title from the script's first page: an explicit "TITLE: …" / "VIDEO TITLE: …"
+ * line wins, otherwise the first line that reads like a title (not a heading, label or shot).
+ */
+export function scriptTitle(firstPage: string): string | null {
+  const lines = firstPage
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((l) => l.replace(/^[\s#*_>]+|[\s*_]+$/g, "").trim())
+    .filter(Boolean);
+  for (const l of lines) {
+    const m = l.match(/^(?:video\s+|working\s+|final\s+)?title\s*[:\-–—]\s*(.+)$/i);
+    if (m?.[1].trim()) return clean(m[1]);
+  }
+  for (const l of lines) {
+    if (l.length < 4 || l.length > 120) continue;
+    const pm = l.match(PART_RE);
+    if (pm && isPartHeading(pm)) continue;
+    if (SHOT_RE.test(l) || SHOT_RANGE_RE.test(l) || CHAPTERS_HEAD_RE.test(l)) continue;
+    if (LABEL_RE.test(l)) continue;
+    // Boilerplate a script cover tends to carry.
+    if (/^(polished|final|draft|full)?\s*(video\s+)?script\b|^finance with naz$|^page \d+/i.test(l)) continue;
+    if (/^[\d\s:.\-–—()]+$/.test(l)) continue;
+    return clean(l);
+  }
+  return null;
+}
+
+const clean = (s: string) => s.replace(/^["“'](.*)["”']$/, "$1").replace(/\s+/g, " ").trim();

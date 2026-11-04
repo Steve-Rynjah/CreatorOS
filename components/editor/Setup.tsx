@@ -73,7 +73,10 @@ export function buildScriptProject(
   const byNumber = shots.every((s) => imgs.some((i) => i.index === s.n));
   const shotInfo = new Map(part.shots.map((s) => [s.n, s]));
   const chapterInfo = narration.intro ? chapterOf(part) : null;
-  const chapter = chapterInfo && narration.intro ? { ...chapterInfo, duration: narration.intro.end } : undefined;
+  const chapter =
+    chapterInfo && narration.intro ? { ...chapterInfo, duration: narration.intro.end, style: saved?.chapter?.style } : undefined;
+  // Projects saved before dissolves became the default get them now.
+  const upgrade = saved?.outro === undefined;
 
   const images: ImageClip[] = [];
   const texts: TextClip[] = [];
@@ -94,7 +97,8 @@ export function buildScriptProject(
       name: img.name,
       path: img.path,
       motion: prev?.motion ?? (opts.motion && info ? scriptMotion(info.motion) : "none"),
-      transition: prev?.transition ?? "none",
+      // Dissolve between shots by default; the first shot fades up from black unless the title card leads in.
+      transition: images.length === 0 && chapter ? "none" : (!upgrade && prev?.transition) || "dissolve",
       transitionDur: prev?.transitionDur ?? 0.6,
       duration: dur,
       shot: s.n,
@@ -106,7 +110,7 @@ export function buildScriptProject(
         start: s.start + 0.2,
         duration: Math.max(1.2, dur - 0.4),
         x: 0.5,
-        y: 0.14,
+        y: 0.18,
         size: 72,
         font: "montserrat",
         color: "#FFFFFF",
@@ -117,6 +121,7 @@ export function buildScriptProject(
         align: "center",
         anim: "pop",
         animDur: 0.3,
+        style: "badge",
       });
     }
   });
@@ -153,6 +158,7 @@ export function buildScriptProject(
     zoomAmount: saved?.zoomAmount ?? 0.12,
     script: { file: meta.file, part: part.title, voice: meta.voice, shots: shots.length },
     images,
+    outro: saved?.outro ?? 0.6,
     texts: saved?.texts?.length ? saved.texts : texts,
     cues: saved?.cues?.length && !!saved.chapter === !!chapter ? saved.cues : cues,
     subtitle: saved?.subtitle ?? { enabled: opts.subtitles, size: 64, position: "bottom", box: false, style: "modern", highlight: "#FFD23F" },
@@ -207,7 +213,9 @@ export function Setup({ onLoaded }: { onLoaded: (p: Project) => void }) {
   }
 
   const part = script?.parts.find((p) => p.key === partKey) ?? null;
-  const chapter = part ? chapterOf(part) : null;
+  // Only the opening part (the hook) gets a title card; later parts go straight into their shots.
+  const isHook = !!part && script?.parts[0]?.key === part.key;
+  const chapter = part && isHook ? chapterOf(part) : null;
   const withCard = !!chapter && opts.chapter;
   const narrationKey = part ? `${script?.file}|${part.key}|${voice}|${rate}|${withCard ? "card" : ""}` : "";
   const narration = narrations[narrationKey] ?? null;
@@ -494,7 +502,7 @@ export function Setup({ onLoaded }: { onLoaded: (p: Project) => void }) {
   );
 }
 
-function Field({ label, className = "", children }: { label: string; className?: string; children: ReactNode }) {
+export function Field({ label, className = "", children }: { label: string; className?: string; children: ReactNode }) {
   return (
     <label className={`block ${className}`}>
       <span className="block text-xs font-medium text-muted mb-1.5">{label}</span>
@@ -503,7 +511,7 @@ function Field({ label, className = "", children }: { label: string; className?:
   );
 }
 
-function Select({
+export function Select({
   value,
   onChange,
   disabled,
@@ -528,7 +536,7 @@ function Select({
   );
 }
 
-function Chip({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
+export function Chip({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
   return (
     <button
       type="button"
@@ -637,10 +645,10 @@ function NarrationBox({
   );
 }
 
-const cardCls =
+export const cardCls =
   "group relative rounded-2xl border p-5 flex flex-col gap-4 text-left transition-all hover:-translate-y-0.5 hover:shadow-[0_12px_30px_-12px_rgba(0,0,0,0.6)]";
 
-function CheckBadge() {
+export function CheckBadge() {
   return (
     <span className="absolute top-4 right-4 w-5 h-5 rounded-full bg-success grid place-items-center">
       <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -714,7 +722,7 @@ function FolderCard({ value, onChange, onClear }: { value: string; onChange: (v:
 }
 
 /** Script PDF — click or drop to upload. */
-function PdfCard({
+export function PdfCard({
   file,
   meta,
   reading,

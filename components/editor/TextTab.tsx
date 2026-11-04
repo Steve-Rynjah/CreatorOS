@@ -1,10 +1,12 @@
 "use client";
+import { useEffect, useRef } from "react";
+import { drawText } from "@/lib/editor/text";
 import { Button, Label, Toggle, inputCls } from "@/components/ui";
 import { TEXT_FONTS } from "@/lib/fonts";
 import { player } from "@/lib/editor/player";
 import { projectStore, select, selectionStore, timeStore, updateProject, useStore } from "@/lib/editor/store";
 import { formatTime, parseTime, uid } from "@/lib/editor/timing";
-import { BRAND, TEXT_ANIMS, textAnim, type TextAnim, type TextClip } from "@/lib/editor/types";
+import { BRAND, CHAPTER_STYLE_DEFAULT, TEXT_ANIMS, type ChapterStyle, TEXT_STYLES, textAnim, textRotation, textStyle, type TextAnim, type TextClip, type TextStyle } from "@/lib/editor/types";
 
 export function newText(start: number, partial: Partial<TextClip> = {}): TextClip {
   return {
@@ -24,14 +26,16 @@ export function newText(start: number, partial: Partial<TextClip> = {}): TextCli
     align: "center",
     anim: "pop",
     animDur: 0.3,
+    style: "badge",
     ...partial,
   };
 }
 
 const PRESETS: { label: string; make: (t: number) => Partial<TextClip> }[] = [
-  { label: "Title", make: () => ({ text: "Title", size: 128, y: 0.45, font: "bebas" }) },
-  { label: "Lower third", make: () => ({ text: "Name / place", size: 48, x: 0.06, y: 0.88, align: "left", background: true, anim: "slide-in" }) },
-  { label: "Highlight", make: () => ({ text: "Key point", size: 64, y: 0.12, color: BRAND.black, background: true, bgColor: BRAND.yellow }) },
+  { label: "Title", make: () => ({ text: "Title", size: 128, y: 0.45, font: "bebas", style: "plain" }) },
+  { label: "Lower third", make: () => ({ text: "Name / place", size: 48, x: 0.06, y: 0.88, align: "left", background: true, anim: "slide-in", style: "plain" }) },
+  { label: "Highlight", make: () => ({ text: "Key point", size: 64, y: 0.12, color: BRAND.black, background: true, bgColor: BRAND.yellow, style: "plain" }) },
+  { label: "Badge", make: () => ({ text: "Who was he?", size: 84, y: 0.2, style: "badge" }) },
 ];
 
 const COLS = [
@@ -47,6 +51,9 @@ const ROWS = [
 
 const SIZES = [32, 40, 48, 56, 64, 72, 84, 96, 110, 128, 150, 180];
 const ANIM_DURS = [0.1, 0.2, 0.3, 0.4, 0.5];
+/** Typing takes longer: how long until the whole text is typed out. */
+const TYPE_DURS = [0.5, 1, 1.5, 2, 2.5, 3, 4, 5, 6, 8];
+const TYPE_DEFAULT = 1.5;
 const SWATCHES = [
   { value: BRAND.yellow, label: "Yellow" },
   { value: BRAND.black, label: "Black" },
@@ -71,11 +78,12 @@ export function TextTab() {
 
   return (
     <div className="p-4 space-y-5">
+      {p.chapter && <TitleCardEditor open={sel.kind === "chapter"} />}
       <div className="space-y-2">
         <Button variant="primary" className="w-full rounded-xl" onClick={() => add()}>
           + Add text at playhead
         </Button>
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-2 gap-2">
           {PRESETS.map((pr) => (
             <Button key={pr.label} size="sm" className="rounded-lg" onClick={() => add(pr.make(timeStore.get()))}>
               {pr.label}
@@ -126,6 +134,54 @@ export function TextTab() {
             </div>
           </div>
 
+          <div>
+            <Label hint={TEXT_STYLES.find((x) => x.value === textStyle(current))?.hint}>Style</Label>
+            <div className="grid grid-cols-3 gap-1.5">
+              {TEXT_STYLES.map((st) => {
+                const on = textStyle(current) === st.value;
+                return (
+                  <button
+                    key={st.value}
+                    type="button"
+                    title={st.hint}
+                    // A new style brings its own tilt unless you've set an angle yourself.
+                    onClick={() => {
+                      const ownTilt = TEXT_STYLES.find((x) => x.value === textStyle(current))?.tilt;
+                      const customAngle = current.rotation !== undefined && current.rotation !== ownTilt;
+                      set({ style: st.value as TextStyle, ...(customAngle ? {} : { rotation: undefined }) });
+                    }}
+                    className={`rounded-lg overflow-hidden text-[11px] transition ${
+                      on ? "ring-2 ring-accent" : "ring-1 ring-line-strong/60 hover:ring-muted"
+                    }`}
+                  >
+                    <StyleThumb style={st.value as TextStyle} />
+                    <span className={`block py-1 ${on ? "bg-accent text-white" : "bg-chip/60"}`}>{st.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div>
+            <Label hint="or drag the text's edge on the preview (Shift snaps 15°)">Rotation</Label>
+            <div className="flex items-center gap-2">
+              <input
+                type="range"
+                min={-180}
+                max={180}
+                step={1}
+                value={textRotation(current)}
+                onChange={(e) => set({ rotation: Number(e.target.value) })}
+                className="flex-1"
+                aria-label="Rotation"
+              />
+              <span className="w-12 text-right font-mono text-xs tabular-nums">{Math.round(textRotation(current))}°</span>
+              <Button size="sm" disabled={current.rotation === undefined} onClick={() => set({ rotation: undefined })} title="Back to the style's own tilt">
+                Reset
+              </Button>
+            </div>
+          </div>
+
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label>Font</Label>
@@ -149,6 +205,8 @@ export function TextTab() {
             </div>
           </div>
 
+          {textStyle(current) === "plain" && (
+          <>
           <div>
             <Label>Text colour</Label>
             <Swatches value={current.color} onChange={(v) => v && set({ color: v })} />
@@ -161,6 +219,8 @@ export function TextTab() {
               onChange={(v) => (v ? set({ background: true, bgColor: v }) : set({ background: false }))}
             />
           </div>
+          </>
+          )}
 
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -168,7 +228,12 @@ export function TextTab() {
               <select
                 className={`${inputCls} rounded-xl`}
                 value={anim}
-                onChange={(e) => set({ anim: e.target.value as TextAnim, fade: e.target.value !== "none", animDur })}
+                onChange={(e) => {
+                  const next = e.target.value as TextAnim;
+                  // Typewriter and the other animations use different speed ranges; pick a sensible one when switching.
+                  const dur = next === "typewriter" ? (animDur >= 0.5 ? animDur : TYPE_DEFAULT) : animDur > 0.5 ? 0.3 : animDur;
+                  set({ anim: next, fade: next !== "none", animDur: dur });
+                }}
               >
                 {TEXT_ANIMS.map((a) => (
                   <option key={a.value} value={a.value}>
@@ -178,18 +243,21 @@ export function TextTab() {
               </select>
             </div>
             <div>
-              <Label>Animation speed</Label>
+              <Label>{anim === "typewriter" ? "Typing time" : "Animation speed"}</Label>
               <select
                 className={`${inputCls} rounded-xl`}
                 value={animDur}
                 disabled={anim === "none"}
                 onChange={(e) => set({ animDur: Number(e.target.value), anim })}
               >
-                {(ANIM_DURS.includes(animDur) ? ANIM_DURS : [...ANIM_DURS, animDur].sort((a, b) => a - b)).map((v) => (
-                  <option key={v} value={v}>
-                    {v}s
-                  </option>
-                ))}
+                {(() => {
+                  const opts = anim === "typewriter" ? TYPE_DURS : ANIM_DURS;
+                  return (opts.includes(animDur) ? opts : [...opts, animDur].sort((a, b) => a - b)).map((v) => (
+                    <option key={v} value={v} disabled={anim === "typewriter" && v > current.duration * 0.85}>
+                      {v}s{anim === "typewriter" && v > current.duration * 0.85 ? " (longer than the clip)" : ""}
+                    </option>
+                  ));
+                })()}
               </select>
             </div>
           </div>
@@ -223,7 +291,8 @@ export function TextTab() {
                   key={t.id}
                   onClick={() => {
                     select("text", t.id);
-                    player.seek(t.start + 0.01);
+                    // Land just after the in-animation so the text is fully visible while you edit it.
+                    player.seek(Math.min(t.start + t.duration / 2, t.start + (textAnim(t) === "none" ? 0.01 : (t.animDur ?? 0.3) + 0.05)));
                   }}
                   className={`w-full text-left px-2 py-1.5 rounded-md text-sm flex gap-2 ${
                     current?.id === t.id ? "bg-hover" : "hover:bg-chip"
@@ -312,5 +381,105 @@ export function TimeField({ label, value, onChange }: { label: string; value: nu
         onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
       />
     </div>
+  );
+}
+
+const THUMB_TEXT: Record<TextStyle, string> = {
+  badge: "Who Was He?",
+  pop3d: "No Way!",
+  marker: "Key point",
+  stamp: "Classified",
+  neon: "Open late",
+  plain: "Plain text",
+};
+
+/** Small live render of a text style, drawn with the same code as the video. */
+function StyleThumb({ style }: { style: TextStyle }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    let alive = true;
+    const draw = () => {
+      const c = ref.current;
+      if (!alive || !c) return;
+      const W = 240;
+      const H = 120;
+      const ctx = c.getContext("2d")!;
+      const g = ctx.createLinearGradient(0, 0, W, H);
+      g.addColorStop(0, "#2a2530");
+      g.addColorStop(1, "#4a3426");
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W, H);
+      // drawText sizes by H/1080; this gives ~30px type in the thumbnail.
+      drawText(ctx, newText(0, { id: `thumb-${style}`, text: THUMB_TEXT[style], style, anim: "none", size: 270, y: 0.55 }), W, H, 0.5);
+    };
+    draw();
+    document.fonts?.ready.then(draw);
+    return () => {
+      alive = false;
+    };
+  }, [style]);
+  return <canvas ref={ref} width={240} height={120} className="block w-full aspect-[2/1]" aria-hidden />;
+}
+
+const CARD_SIZES = [90, 110, 130, 150, 170, 190, 220];
+
+/** Font, size and colours of the hook's title card (the chapter title shown before the first shot). */
+function TitleCardEditor({ open }: { open: boolean }) {
+  const ch = useStore(projectStore, (s) => s!.chapter)!;
+  const st = { ...CHAPTER_STYLE_DEFAULT, ...ch.style };
+  const set = (patch: Partial<ChapterStyle>) =>
+    updateProject((s) => (s.chapter ? { ...s, chapter: { ...s.chapter, style: { ...s.chapter.style, ...patch } } } : s));
+  const jump = () => player.seek(Math.max(0, Math.min(ch.duration - 1.3, 1.4)));
+
+  return (
+    <details
+      open={open}
+      className="rounded-xl border border-line-strong/60 bg-bg/40 [&_summary::-webkit-details-marker]:hidden"
+      onToggle={(e) => (e.currentTarget as HTMLDetailsElement).open && jump()}
+    >
+      <summary className="cursor-pointer select-none px-3 py-2.5 flex items-center gap-2 text-sm">
+        <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#FFD23F]">Title card</span>
+        <span className="truncate text-muted">{ch.title}</span>
+        <span className="ml-auto text-xs text-muted">Edit</span>
+      </summary>
+      <div className="px-3 pb-3 space-y-4">
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <Label>Font</Label>
+            <select className={`${inputCls} rounded-xl`} value={st.font} onChange={(e) => set({ font: e.target.value })}>
+              {TEXT_FONTS.map((f) => (
+                <option key={f.key} value={f.key}>
+                  {f.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <Label>Size</Label>
+            <select className={`${inputCls} rounded-xl`} value={st.size} onChange={(e) => set({ size: Number(e.target.value) })}>
+              {(CARD_SIZES.includes(st.size) ? CARD_SIZES : [...CARD_SIZES, st.size].sort((a, b) => a - b)).map((v) => (
+                <option key={v} value={v}>
+                  {v}px
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <div>
+          <Label>Title colour</Label>
+          <Swatches value={st.color} onChange={(v) => v && set({ color: v })} />
+        </div>
+        <div>
+          <Label hint="part label and the rule under it">Accent colour</Label>
+          <Swatches value={st.accent} onChange={(v) => v && set({ accent: v })} />
+        </div>
+        <div className="flex items-center justify-between">
+          <Toggle checked={st.uppercase} onChange={(v) => set({ uppercase: v })} label="All caps" />
+          <Button size="sm" variant="ghost" disabled={!ch.style} onClick={() => updateProject((s) => (s.chapter ? { ...s, chapter: { ...s.chapter, style: undefined } } : s))}>
+            Reset look
+          </Button>
+        </div>
+      </div>
+    </details>
   );
 }

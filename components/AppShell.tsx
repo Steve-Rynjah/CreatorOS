@@ -29,6 +29,17 @@ const NAV: { href: string; label: string; hint: string; icon: ReactNode }[] = [
       </>
     ),
   },
+  {
+    href: "/publish",
+    label: "Publish Kit",
+    hint: "Titles, chapters, captions and thumbnails",
+    icon: (
+      <>
+        <rect x="2.8" y="4.5" width="18.4" height="15" rx="3" opacity="0.55" />
+        <path d="M12 7.5l4.2 4.3h-2.7V16h-3v-4.2H7.8z" />
+      </>
+    ),
+  },
 ];
 
 function isActive(pathname: string, href: string) {

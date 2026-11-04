@@ -38,7 +38,23 @@ export type TextClip = {
   anim?: TextAnim;
   /** Seconds the in/out animation takes. */
   animDur?: number;
+  /** Look of the text; see TEXT_STYLES. Unset = "badge". */
+  style?: TextStyle;
+  /** Degrees clockwise; unset = the style's own tilt. */
+  rotation?: number;
 };
+
+export type TextStyle = "plain" | "badge" | "pop3d" | "marker" | "stamp" | "neon";
+
+/** `tilt`: the style's default rotation in degrees. */
+export const TEXT_STYLES: { value: TextStyle; label: string; hint: string; tilt: number }[] = [
+  { value: "badge", label: "Badge", hint: "One line: split pill · two lines: stacked pills", tilt: -3 },
+  { value: "pop3d", label: "3D Pop", hint: "Thumbnail-style block letters, last word in yellow", tilt: -2 },
+  { value: "marker", label: "Marker", hint: "Highlighter strokes that wipe in behind each line", tilt: 0 },
+  { value: "stamp", label: "Stamp", hint: "Inked rubber stamp that slams in", tilt: -8 },
+  { value: "neon", label: "Neon", hint: "Glowing sign that flickers on", tilt: 0 },
+  { value: "plain", label: "Plain", hint: "Your font and colours, optional box", tilt: 0 },
+];
 
 /** `words`: start time of each word of `text` (from the voice), used to highlight the word being spoken. */
 export type Cue = { id: string; start: number; end: number; text: string; words?: number[] };
@@ -52,10 +68,20 @@ export type SubtitleStyle = {
   style?: "modern" | "classic";
   /** Highlight colour for the spoken word (modern style). */
   highlight?: string;
+  /** Gap between the frame edge (bottom or top, per `position`) and the subtitles, in % of frame height. */
+  margin?: number;
 };
 
-/** Movie-style title card at the start of a part, voiced, fading into the first shot. */
-export type Chapter = { label: string | null; title: string; duration: number };
+/** The subtitle gap in % of frame height: the chosen one, else what each style has always used. */
+export const subtitleMargin = (s: SubtitleStyle) =>
+  s.margin ?? ((s.style ?? "modern") === "modern" ? (s.position === "bottom" ? 14 : 12) : 8);
+
+/** Movie-style title card at the start of the hook part, voiced, fading into the first shot. */
+export type Chapter = { label: string | null; title: string; duration: number; style?: ChapterStyle };
+
+/** Look of the title card's text; unset fields use the defaults below. */
+export type ChapterStyle = { font?: string; size?: number; color?: string; accent?: string; uppercase?: boolean };
+export const CHAPTER_STYLE_DEFAULT: Required<ChapterStyle> = { font: "bebas", size: 150, color: "#FFFFFF", accent: "#FFD23F", uppercase: true };
 
 export type AudioPart = { name: string; path: string; start: number; duration: number };
 
@@ -81,12 +107,14 @@ export type Project = {
   chapter?: Chapter;
 
   images: ImageClip[];
+  /** Seconds the video fades to black at its very end (0 = hard cut), so merged parts dissolve into each other. */
+  outro?: number;
   texts: TextClip[];
   cues: Cue[];
   subtitle: SubtitleStyle;
 };
 
-export type Selection = { kind: "image" | "text" | "cue" | null; ids: string[] };
+export type Selection = { kind: "image" | "text" | "cue" | "chapter" | null; ids: string[] };
 
 export const MOTIONS: { value: Motion; label: string }[] = [
   { value: "none", label: "None" },
@@ -108,6 +136,11 @@ export const TEXT_ANIMS: { value: TextAnim; label: string }[] = [
 export const BRAND = { yellow: "#FFD23F", black: "#1B1B1B", white: "#FFFFFF" } as const;
 
 export const textAnim = (t: TextClip): TextAnim => t.anim ?? (t.fade ? "fade" : "none");
+
+/** Badge is the house style; clips saved before styles existed get it too. */
+export const textStyle = (t: TextClip): TextStyle => t.style ?? "badge";
+
+export const textRotation = (t: TextClip): number => t.rotation ?? TEXT_STYLES.find((s) => s.value === textStyle(t))?.tilt ?? 0;
 
 export const TRANSITIONS: { value: Transition; label: string }[] = [
   { value: "none", label: "Cut" },

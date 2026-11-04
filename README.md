@@ -24,4 +24,19 @@ Shortcuts: Space play/pause · ←/→ move one frame (Shift: 1s) · ⌘Z / ⇧�
 Edits are autosaved in the browser for each folder pair.
 
 ## Merge Videos
-Choose a folder with `VIDEO01.mp4, VIDEO02.mp4 …` and click **Merge**. If all parts have the same format (which is true for parts exported from this app), they are joined losslessly with no re-encode. If not, they are re-encoded with H.264 CRF 16 and AAC 320k.
+Add the **Hook, V1–V5** videos and the **polished script PDF**, then click **Merge**.
+- **Adding a video:** click a box to pick the video (the file stays where it is), or drop it on the box. Drag one filled box onto another to swap them.
+- **Joining:** if every part has the same format, they are joined losslessly. If not, they are re-encoded with H.264 CRF 16 and AAC 320k.
+- **Captions:** the `.srt` comes from the script, with no transcription:
+  - A part you built on Home from this same script reuses its exact burned-in subtitles.
+  - Any other part is timed to the voice: ffmpeg finds the pauses, and each sentence is matched to its pause. In tests on Edge-voiced parts, captions started a median of 0.05–0.14 s from the true time.
+  - The hook's spoken title card is detected and captioned automatically.
+- **Result:** the `.srt` is saved next to the merged MP4 and can be downloaded from the page.
+
+## Publish Kit
+Everything for the YouTube upload, with no paid APIs or keys.
+1. Add the merged MP4, the polished script PDF and the `.srt` that Merge Videos saved next to the video. The title is read from the PDF's first page.
+2. **Build Publish Kit**: captions come from that `.srt`. Chapters are found by matching each part's first narration line in those subtitles: first at 0:00, each ≥ 10 s, ≥ 3 needed.
+3. **Copy SEO prompt** → paste it into ChatGPT/Claude → paste the JSON answer back. Titles, description, tags, hashtags, pinned comment and Short idea fill in and can be edited.
+4. Thumbnails are drawn in the browser from a shot image: 1280×720 JPG under 2 MB, up to 3 versions.
+5. **Download all** gives a .zip with the thumbnails, `captions.srt` and `metadata.txt`. Kits autosave under the video title.

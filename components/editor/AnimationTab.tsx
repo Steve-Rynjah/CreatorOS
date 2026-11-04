@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { Button, Label } from "@/components/ui";
+import { Button, Label, Toggle } from "@/components/ui";
 import { projectStore, selectionStore, updateProject, useStore } from "@/lib/editor/store";
 import { MOTIONS, TRANSITIONS, type Motion, type Transition } from "@/lib/editor/types";
 import { fileUrl } from "@/lib/editor/render";
@@ -22,7 +22,6 @@ export function AnimationTab() {
   const apply = (preset: PresetDrag) => {
     if (ids.length) applyPreset(ids, preset, dur);
   };
-  const applyAll = (preset: PresetDrag) => applyPreset(p.images.map((c) => c.id), preset, dur);
 
   return (
     <div className="p-4 space-y-6">
@@ -120,6 +119,15 @@ export function AnimationTab() {
       </section>
 
       <section className="space-y-2">
+        <Label hint={(p.outro ?? 0) > 0 ? `${(p.outro ?? 0).toFixed(1)}s` : undefined}>End of this part</Label>
+        <Toggle
+          checked={(p.outro ?? 0) > 0}
+          onChange={(v) => updateProject((s) => ({ ...s, outro: v ? dur : 0 }))}
+          label="Fade out to black — dissolves into the next part when merged"
+        />
+      </section>
+
+      <section className="space-y-2">
         <Label>Quick apply to every clip</Label>
         <div className="flex flex-wrap gap-2">
           <Button
@@ -133,7 +141,17 @@ export function AnimationTab() {
           >
             Alternate zoom in/out
           </Button>
-          <Button size="sm" onClick={() => applyAll({ kind: "transition", value: "dissolve" })}>
+          <Button
+            size="sm"
+            onClick={() =>
+              updateProject((s) => ({
+                ...s,
+                // Every cut, the fade-in of the first shot (unless the title card leads in) and the fade-out at the end.
+                images: s.images.map((c, i) => (i === 0 && s.chapter ? c : { ...c, transition: "dissolve", transitionDur: dur })),
+                outro: dur,
+              }))
+            }
+          >
             Dissolve all
           </Button>
           <Button
@@ -143,6 +161,7 @@ export function AnimationTab() {
               updateProject((s) => ({
                 ...s,
                 images: s.images.map((c) => ({ ...c, motion: "none", transition: "none" })),
+                outro: 0,
               }))
             }
           >

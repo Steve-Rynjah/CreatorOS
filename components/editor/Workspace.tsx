@@ -67,7 +67,7 @@ export function Workspace({ assets }: { assets: Assets }) {
   // Selecting a clip brings its tab forward.
   useEffect(() => {
     if (sel.kind === "image") setTab("animation"); // eslint-disable-line react-hooks/set-state-in-effect
-    if (sel.kind === "text") setTab("text");
+    if (sel.kind === "text" || sel.kind === "chapter") setTab("text");
     if (sel.kind === "cue") setTab("subtitle");
   }, [sel.kind, sel.ids]);
 

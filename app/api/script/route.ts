@@ -1,5 +1,5 @@
 import { extractText, getDocumentProxy } from "unpdf";
-import { parseScript } from "@/lib/server/script";
+import { parseScript, scriptTitle } from "@/lib/server/script";
 
 const MAX_PDF_BYTES = 20 * 1024 * 1024;
 
@@ -12,10 +12,12 @@ export async function POST(req: Request) {
 
   let text: string;
   let pages: number;
+  let firstPage: string;
   try {
     const pdf = await getDocumentProxy(bytes);
-    const r = await extractText(pdf, { mergePages: true });
-    text = r.text;
+    const r = await extractText(pdf, { mergePages: false });
+    text = r.text.join("\n");
+    firstPage = r.text[0] ?? "";
     pages = r.totalPages;
   } catch {
     return fail("Could not read that PDF. Is it password-protected or damaged?");
@@ -26,7 +28,7 @@ export async function POST(req: Request) {
   if (!parts.length) {
     return fail(`No NARRATION found in ${name}. Put the spoken lines under a NARRATION: label for each shot.`);
   }
-  return Response.json({ file: name, pages, parts });
+  return Response.json({ file: name, pages, parts, title: scriptTitle(firstPage) });
 }
 
 function fail(error: string) {

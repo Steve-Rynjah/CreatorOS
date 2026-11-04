@@ -83,6 +83,7 @@ body {
 
 input[type="range"] {
   accent-color: var(--accent);
+  cursor: ew-resize;
 }
 
 input[type="color"] {
