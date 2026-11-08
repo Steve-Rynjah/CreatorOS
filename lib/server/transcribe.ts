@@ -72,3 +72,61 @@ export async function transcribe(
   }
   return segments;
 }
+
+export type Word = { text: string; start: number; end: number };
+
+/**
+ * Every spoken word with its time, from the same local Whisper model (word
+ * timestamps come from the model's cross-attention). Used by Shorts Maker to
+ * time a finished video's script when no Home edit of it exists.
+ */
+export async function transcribeWords(
+  mediaFile: string,
+  onStage: (stage: string, progress: number) => void,
+): Promise<Word[]> {
+  onStage("Loading the speech model (the first run downloads it)", 0.03);
+  const transcriber = await loadModel("Xenova/whisper-base.en");
+
+  onStage("Reading the audio", 0.08);
+  const pcm = await decodePcm(mediaFile, 16000);
+
+  const words: Word[] = [];
+  // ~2 min windows, cut in a quiet spot, so progress moves and no word is split.
+  const rate = 16000;
+  const total = pcm.length / rate;
+  let start = 0;
+  while (start < total - 0.05) {
+    let end = Math.min(total, start + 120);
+    if (end < total) end = quietestNear(pcm, rate, end, 4);
+    const slice = pcm.subarray(Math.floor(start * rate), Math.floor(end * rate));
+    const out = await transcriber(slice, { chunk_length_s: 30, stride_length_s: 5, return_timestamps: "word" });
+    for (const c of out.chunks ?? []) {
+      const text = c.text.trim();
+      if (!text) continue;
+      const s = start + (c.timestamp[0] ?? 0);
+      const e = start + (c.timestamp[1] ?? c.timestamp[0] ?? 0);
+      words.push({ text, start: s, end: Math.max(e, s + 0.05) });
+    }
+    onStage(`Transcribing · ${Math.round(end / 60)} of ${Math.ceil(total / 60)} min`, 0.1 + 0.9 * (end / total));
+    start = end;
+  }
+  return words;
+}
+
+/** The quietest 50 ms within ±`span` s of `t`, so a window boundary falls between words. */
+function quietestNear(pcm: Float32Array, rate: number, t: number, span: number) {
+  const step = Math.floor(rate * 0.05);
+  let best = t;
+  let bestE = Infinity;
+  for (let x = Math.max(0, t - span); x < t + span; x += 0.05) {
+    const a = Math.floor(x * rate);
+    if (a + step > pcm.length) break;
+    let e = 0;
+    for (let i = a; i < a + step; i++) e += pcm[i] * pcm[i];
+    if (e < bestE) {
+      bestE = e;
+      best = x;
+    }
+  }
+  return best;
+}

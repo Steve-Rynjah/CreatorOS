@@ -15,6 +15,8 @@ export type ScriptShot = {
   /** "Zoom in." / "Zoom out." as written in the script. */
   motion: string;
   onScreen: string;
+  /** The narration with its [VERIFY] flags still in place; only set when the shot has one. */
+  verifyMarked?: string;
 };
 
 export type ScriptPart = {

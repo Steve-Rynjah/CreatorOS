@@ -21,7 +21,7 @@ import {
   type VoiceId,
 } from "@/lib/script";
 
-const LAST_KEY = "creatoros:last-setup";
+export const LAST_KEY = "creatoros:last-setup";
 const SCRIPT_KEY = "creatoros:script";
 
 export type ScanResult = {
@@ -161,7 +161,7 @@ export function buildScriptProject(
     outro: saved?.outro ?? 0.6,
     texts: saved?.texts?.length ? saved.texts : texts,
     cues: saved?.cues?.length && !!saved.chapter === !!chapter ? saved.cues : cues,
-    subtitle: saved?.subtitle ?? { enabled: opts.subtitles, size: 64, position: "bottom", box: false, style: "modern", highlight: "#FFD23F" },
+    subtitle: saved?.subtitle ?? { enabled: opts.subtitles, size: 42, margin: 5, position: "bottom", box: false, style: "modern", highlight: "#FFD23F" },
   };
 }
 
@@ -171,7 +171,7 @@ export function Setup({ onLoaded }: { onLoaded: (p: Project) => void }) {
   const [partKey, setPartKey] = useState<string>("");
   const [voice, setVoice] = useState<VoiceId>(DEFAULT_VOICE);
   const [rate, setRate] = useState<SpeedId>(DEFAULT_SPEED);
-  const [opts, setOpts] = useState<BuildOptions>({ subtitles: true, onScreen: true, motion: true, chapter: true });
+  const [opts, setOpts] = useState<BuildOptions>({ subtitles: true, onScreen: false, motion: true, chapter: true });
   const [narrations, setNarrations] = useState<Record<string, Narration>>({});
   const [job, setJob] = useState<{ progress: number; stage: string } | null>(null);
   const [reading, setReading] = useState(false);
@@ -658,8 +658,31 @@ export function CheckBadge() {
   );
 }
 
-/** Scene images folder — opens the native folder picker; the path can also be pasted. */
-function FolderCard({ value, onChange, onClear }: { value: string; onChange: (v: string) => void; onClear: () => void }) {
+/** An images folder — opens the native folder picker; the path can also be pasted. */
+export function FolderCard({
+  value,
+  onChange,
+  onClear,
+  title = "Scene images",
+  hint = "Choose the folder with 001.png, 002.png…",
+  prompt = "Choose the scene images folder",
+  summary,
+  prefix,
+  ok = true,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  onClear: () => void;
+  title?: string;
+  hint?: string;
+  prompt?: string;
+  /** Shown under the title once there is something to say about the folder. */
+  summary?: ReactNode;
+  /** Kept in front of the folder's name once one is chosen ("V1 · PART-01"). */
+  prefix?: string;
+  /** False hides the tick (the folder couldn't be read, or hasn't been yet). */
+  ok?: boolean;
+}) {
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(false);
   const name = value.split("/").filter(Boolean).pop();
@@ -667,7 +690,7 @@ function FolderCard({ value, onChange, onClear }: { value: string; onChange: (v:
   async function browse() {
     setBusy(true);
     try {
-      const r = await fetch("/api/pick-folder", { method: "POST", body: JSON.stringify({ prompt: "Choose the scene images folder" }) });
+      const r = await fetch("/api/pick-folder", { method: "POST", body: JSON.stringify({ prompt }) });
       const j = await r.json();
       if (j.path) onChange(j.path);
       else if (j.error) setEditing(true);
@@ -680,7 +703,7 @@ function FolderCard({ value, onChange, onClear }: { value: string; onChange: (v:
     <div
       className={`${cardCls} ${value ? "border-line-strong/60 bg-raised/60" : "border-dashed border-line-strong bg-raised/30 hover:border-link/60"}`}
     >
-      {value && <CheckBadge />}
+      {value && ok && <CheckBadge />}
       <button type="button" onClick={browse} disabled={busy} className="flex flex-col gap-4 text-left outline-none">
         <span className="w-12 h-12 rounded-xl bg-gradient-to-br from-sky-400/25 to-accent/25 text-sky-300 grid place-items-center ring-1 ring-sky-400/20 group-hover:scale-105 transition-transform">
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -690,10 +713,11 @@ function FolderCard({ value, onChange, onClear }: { value: string; onChange: (v:
           </svg>
         </span>
         <span className="min-w-0">
-          <span className="block font-semibold">{busy ? "Choosing…" : value ? name : "Scene images"}</span>
-          <span className="block text-xs text-muted mt-0.5 truncate">{value || "Choose the folder with 001.png, 002.png…"}</span>
+          <span className="block font-semibold">{busy ? "Choosing…" : value ? (prefix ? `${prefix} · ${name}` : name) : title}</span>
+          <span className="block text-xs text-muted mt-0.5 truncate">{value || hint}</span>
         </span>
       </button>
+      {summary}
       {editing ? (
         <input
           autoFocus

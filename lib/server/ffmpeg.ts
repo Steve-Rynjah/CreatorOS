@@ -16,6 +16,8 @@ export type RunOptions = {
   onProgress?: (p: number) => void;
   /** Collect raw stdout bytes (e.g. PCM decode). */
   captureStdout?: boolean;
+  /** Working directory, so filter arguments can use short relative paths. */
+  cwd?: string;
 };
 
 export function runFfmpeg(
@@ -23,7 +25,7 @@ export function runFfmpeg(
   opts: RunOptions = {},
 ): Promise<{ stderr: string; stdout: Buffer }> {
   return new Promise((resolve, reject) => {
-    const proc = spawn(ffmpegPath(), ["-hide_banner", ...args]);
+    const proc = spawn(ffmpegPath(), ["-hide_banner", ...args], opts.cwd ? { cwd: opts.cwd } : undefined);
     let stderr = "";
     const out: Buffer[] = [];
     proc.stdout.on("data", (d: Buffer) => {

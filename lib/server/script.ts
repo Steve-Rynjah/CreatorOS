@@ -105,8 +105,16 @@ export function parseScript(source: string): ScriptPart[] {
     const part = line.match(PART_RE);
     if (part && isPartHeading(part)) {
       bucket = openBucket(part[2], `Part ${Number(part[2])}`);
-      if (part[4]) bucket.times.push(part[4].trim());
-      if (part[5]?.trim() && !bucket.name) bucket.name = part[5].trim();
+      // "PART 3: The Margin Call Begins (5:03–7:55)": the timing can also follow the name.
+      let name = part[5]?.trim() ?? "";
+      let timing = part[4]?.trim() ?? "";
+      const trailing = name.match(/^(.*?)[\s*_]*\(([\d:.\s–—-]+)\)$/);
+      if (trailing) {
+        name = trailing[1].trim();
+        if (!timing) timing = trailing[2].trim();
+      }
+      if (timing) bucket.times.push(timing);
+      if (name && !bucket.name) bucket.name = name;
       shot = null;
       field = null;
       continue;
@@ -176,10 +184,19 @@ function finish(d: Draft): ScriptShot {
     .map((l) => l.replace(/^["“](.*)["”]$/, "$1"))
     .filter(Boolean)
     .join("\n");
+  // The same text with the writer's [VERIFY] flags kept, so Shorts Maker can avoid unchecked claims.
+  const marked = d.lines.narration.some((l) => /\[\s*verify\s*\]/i.test(l))
+    ? d.lines.narration
+        .map((l) => l.replace(/\[\s*verify\s*\]/gi, "\u0000").replace(/\[[^\]]*\]/g, "").replace(/\u0000/g, "[VERIFY]").replace(/\s+/g, " ").trim())
+        .map((l) => l.replace(/^["“](.*)["”]$/, "$1"))
+        .filter(Boolean)
+        .join("\n")
+    : undefined;
   return {
     n: d.n,
     time: d.time,
     narration,
+    ...(marked ? { verifyMarked: marked } : {}),
     visual: d.lines.visual.join(" ").replace(/\s+/g, " ").trim(),
     motion: d.lines.motion.join(" ").trim(),
     onScreen: d.lines.onScreen.join(" ").replace(/\s+/g, " ").trim(),

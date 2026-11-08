@@ -222,6 +222,38 @@ function wavFile(pcm: Float32Array, rate: number): Buffer {
   return Buffer.concat([h, data]);
 }
 
+/** Kept after the call-to-action's last word: the Short's audio fades out over this. */
+const LINE_TAIL = 0.5;
+
+/** One line spoken on its own as a WAV (the Shorts' call-to-action), cut to end just after its last word. Cached. */
+export async function speakLine(line: string, voice: VoiceId, rate: SpeedId): Promise<{ path: string; duration: number }> {
+  const text = spokenText(line);
+  const key = createHash("sha1").update(JSON.stringify({ v: 2, voice, rate, text, tail: LINE_TAIL })).digest("hex").slice(0, 16);
+  const dir = path.join(CACHE_DIR, "narration");
+  await ensureDir(dir);
+  const wavPath = path.join(dir, `line-${key}.wav`);
+  const samples = SAMPLE_RATE;
+  const done = await fs.stat(wavPath).catch(() => null);
+  if (done) return { path: wavPath, duration: (done.size - 44) / 2 / samples };
+
+  const spoken = await speak(text, voice, rate);
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "creatoros-tts-"));
+  try {
+    const mp3 = path.join(tmp, "line.mp3");
+    await fs.writeFile(mp3, spoken.mp3);
+    const pcm = await decodePcm(mp3, samples);
+    const lastWord = spoken.words[spoken.words.length - 1]?.end;
+    const speechEnd = lastWord && lastWord * samples < pcm.length ? lastWord : pcm.length / samples;
+    const out = new Float32Array(Math.round((speechEnd + LINE_TAIL) * samples));
+    out.set(pcm.subarray(0, out.length)); // the voice's own decay runs into the closing fade
+    await fs.writeFile(wavPath + ".tmp", wavFile(out, samples));
+    await fs.rename(wavPath + ".tmp", wavPath);
+    return { path: wavPath, duration: out.length / samples };
+  } finally {
+    fs.rm(tmp, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 /** Speaks every shot of a part and lays them out into one WAV with exact shot + subtitle timings. Cached. */
 export async function narratePart(
   shots: { n: number; narration: string }[],

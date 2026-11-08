@@ -40,6 +40,17 @@ const NAV: { href: string; label: string; hint: string; icon: ReactNode }[] = [
       </>
     ),
   },
+  {
+    href: "/shorts",
+    label: "Shorts Maker",
+    hint: "Three vertical Shorts from the final video",
+    icon: (
+      <>
+        <rect x="6.5" y="2.5" width="11" height="19" rx="2.8" opacity="0.55" />
+        <path d="M10.4 8.6l4.6 3.4-4.6 3.4z" />
+      </>
+    ),
+  },
 ];
 
 function isActive(pathname: string, href: string) {

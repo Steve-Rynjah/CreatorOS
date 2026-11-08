@@ -151,11 +151,11 @@ export function FileCard({
 export const STEPS = ["Reading script", "Building captions", "Building chapters", "Ready for SEO"] as const;
 
 /** Progress through the build: done steps tick green, the current one pulses. */
-export function Steps({ step }: { step: number }) {
+export function Steps({ step, labels = STEPS, className = "grid-cols-2 sm:grid-cols-4" }: { step: number; labels?: readonly string[]; className?: string }) {
   return (
-    <ol className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-      {STEPS.map((label, i) => {
-        const done = i < step || (i === STEPS.length - 1 && step === STEPS.length - 1);
+    <ol className={`grid gap-2 ${className}`}>
+      {labels.map((label, i) => {
+        const done = i < step || (labels === STEPS && i === STEPS.length - 1 && step === STEPS.length - 1);
         const current = i === step && !done;
         return (
           <li

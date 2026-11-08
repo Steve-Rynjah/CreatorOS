@@ -40,3 +40,25 @@ Everything for the YouTube upload, with no paid APIs or keys.
 3. **Copy SEO prompt** → paste it into ChatGPT/Claude → paste the JSON answer back. Titles, description, tags, hashtags, pinned comment and Short idea fill in and can be edited.
 4. Thumbnails are drawn in the browser from a shot image: 1280×720 JPG under 2 MB, up to 3 versions.
 5. **Download all** gives a .zip with the thumbnails, `captions.srt` and `metadata.txt`. Kits autosave under the video title.
+
+## Shorts Maker
+Three vertical Shorts (about 35, 45 and 30 s) from the final long video, with no paid APIs or keys.
+1. Add the final video (click to pick it in place, or drop it) and the polished script PDF, then click **Make Shorts**.
+2. **Timing.** If every part of the script was built on Home and those edits add up to the video's length, their word timings are reused. If not, local Whisper (`whisper-base.en`, on your computer) gives word timestamps. If Whisper fails, the voice's pauses are used instead. The heard words are aligned to the script's words, so a misheard name doesn't shift the timing.
+3. **Picking (rules, no AI).** Short 1 is the hook: from the first spoken word (never the title card) to the question nearest 35 s ("Who was the man behind it?"); it freezes on that frame for 1 s, then shows the end tag. Sentence edges are snapped to the voice's pauses, since Whisper often starts a word early. Shorts 2 and 3 are the best-scoring pair that doesn't overlap: money figures, part cliffhangers, tension words, on-screen text, punchy lines, a tense ending. Clips lose points for openings that need earlier context, `[VERIFY]` claims, and sharing a part. Clips never include the last 4 shots or subscribe/like/comment lines.
+4. **Look.** 1080×1920, 30 fps, H.264 + AAC:
+   - the bottom 15% of the source cropped off (old subtitles), then a 4:5 centre crop scaled to 1080×1350, a little above centre, over a blurred, darkened fill of the same cropped frame
+   - a 90 px Anton hook title above the video (max 6 words, all caps, key word in yellow, editable; defaults to the part's title for the hook, else the most striking line)
+   - 80 px Montserrat Black captions about 72% down, 1–3 words at a time, with the spoken word in yellow and a pop
+   - a "Full story on the channel ↑" end tag
+   - audio fades
+   
+   All text stays out of YouTube's right 15% and bottom 20%. The fonts are bundled in `assets/fonts` (OFL, licences in `assets/licenses`).
+5. **Edit.** Each Short has:
+   - a live preview
+   - a sentence-snapping timeline with nudge buttons
+   - the next 5 best clips
+   - editable hook and captions, toggles and a crop slider
+   
+   Only changed Shorts need to be rendered again.
+6. **Export.** `short_1_hook.mp4`, `short_2.mp4`, `short_3.mp4` or a .zip, plus a title and description for each. Projects autosave under the video title.

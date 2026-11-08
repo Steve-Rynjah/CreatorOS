@@ -1,4 +1,5 @@
 import { Bebas_Neue, Montserrat, Oswald, Outfit, Roboto } from "next/font/google";
+import localFont from "next/font/local";
 
 /** UI font (same as the Trade Journal app). */
 export const outfit = Outfit({ subsets: ["latin"], variable: "--font-outfit" });
@@ -13,7 +14,16 @@ export const montserrat = Montserrat({
 });
 export const bebas = Bebas_Neue({ subsets: ["latin"], weight: "400", variable: "--font-bebas" });
 
-export const fontVariables = [outfit, roboto, oswald, montserrat, bebas].map((f) => f.variable).join(" ");
+/** Shorts Maker's caption fonts: the same files ffmpeg burns in (assets/fonts), so preview and render match. */
+export const shortsAnton = localFont({ src: "../assets/fonts/Anton-Regular.ttf", variable: "--font-shorts-anton", display: "block" });
+export const shortsMontserrat = localFont({
+  src: "../assets/fonts/Montserrat-Black.ttf",
+  weight: "900",
+  variable: "--font-shorts-montserrat",
+  display: "block",
+});
+
+export const fontVariables = [outfit, roboto, oswald, montserrat, bebas, shortsAnton, shortsMontserrat].map((f) => f.variable).join(" ");
 
 /** Fonts usable for on-video text. `family` is a CSS font-family list usable by canvas. */
 export const TEXT_FONTS: { key: string; label: string; family: string }[] = [
