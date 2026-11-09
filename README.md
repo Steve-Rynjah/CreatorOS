@@ -43,7 +43,7 @@ Everything for the YouTube upload, with no paid APIs or keys.
 
 ## Shorts Maker
 Three vertical Shorts (about 35, 45 and 30 s) from the final long video, with no paid APIs or keys.
-1. Add the final video (click to pick it in place, or drop it) and the polished script PDF, then click **Make Shorts**.
+1. Add the final video (click to pick it in place, or drop it) and the polished script PDF, then click **Prepare Shorts**. Timing, picking and each Short's voice are done in the background. No video is rendered yet.
 2. **Timing.** If every part of the script was built on Home and those edits add up to the video's length, their word timings are reused. If not, local Whisper (`whisper-base.en`, on your computer) gives word timestamps. If Whisper fails, the voice's pauses are used instead. The heard words are aligned to the script's words, so a misheard name doesn't shift the timing.
 3. **Picking (rules, no AI).** Short 1 is the hook: from the first spoken word (never the title card) to the question nearest 35 s ("Who was the man behind it?"); it freezes on that frame for 1 s, then shows the end tag. Sentence edges are snapped to the voice's pauses, since Whisper often starts a word early. Shorts 2 and 3 are the best-scoring pair that doesn't overlap: money figures, part cliffhangers, tension words, on-screen text, punchy lines, a tense ending. Clips lose points for openings that need earlier context, `[VERIFY]` claims, and sharing a part. Clips never include the last 4 shots or subscribe/like/comment lines.
 4. **Look.** 1080×1920, 30 fps, H.264 + AAC:
@@ -54,11 +54,13 @@ Three vertical Shorts (about 35, 45 and 30 s) from the final long video, with no
    - audio fades
    
    All text stays out of YouTube's right 15% and bottom 20%. The fonts are bundled in `assets/fonts` (OFL, licences in `assets/licenses`).
-5. **Edit.** Each Short has:
+5. **Review.** Each Short shows its voice player and a box with its hook title, spoken script and call-to-action. **Approve all three** to go on. **Not approved** asks which Short to change and which part of the script to use, then cuts a new clip from that part and rebuilds its voice.
+6. **Images.** After approval there is one box per Short. Drop its folder of vertical images (or click to choose it). Each box lists the images it needs in order, with the part, the shot numbers, the time in the video and the script's visual description. **Generate final Shorts** renders the videos. Any shot without an image uses the cropped video.
+7. **Edit.** Each Short has:
    - a live preview
    - a sentence-snapping timeline with nudge buttons
    - the next 5 best clips
    - editable hook and captions, toggles and a crop slider
    
    Only changed Shorts need to be rendered again.
-6. **Export.** `short_1_hook.mp4`, `short_2.mp4`, `short_3.mp4` or a .zip, plus a title and description for each. Projects autosave under the video title.
+8. **Export.** `short_1_hook.mp4`, `short_2.mp4`, `short_3.mp4` or a .zip, plus a title and description for each. Projects autosave under the video title.

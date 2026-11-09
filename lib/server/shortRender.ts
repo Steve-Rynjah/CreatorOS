@@ -1,7 +1,8 @@
 import "server-only";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { AUDIO_FADE, BRAND, CAPTION, CENTER_X, END_TAG, FRAME, HOOK, IMAGE_ZOOM, VIDEO, assFontSize, gradientAlpha, specLength } from "@/lib/shorts/layout";
+import { AUDIO_FADE, BRAND, CAPTION, CENTER_X, END_TAG, FRAME, HOOK, IMAGE_ZOOM, VIDEO, assFontSize, endTagBox, gradientAlpha, specLength } from "@/lib/shorts/layout";
+import { clipLength } from "@/lib/shorts/shots";
 import type { RenderSpec } from "@/lib/shorts/types";
 import { probe, runFfmpeg } from "./ffmpeg";
 import { CACHE_DIR, ensureDir } from "./fsutil";
@@ -82,10 +83,11 @@ export function buildAss(spec: RenderSpec): string {
   if (spec.endTag) {
     const a = spec.endTag.at;
     const w = spec.endTag.width;
-    const x = Math.round(CENTER_X - w / 2);
-    const y = Math.round(END_TAG.centerY - END_TAG.height / 2);
-    line(3, a, dur, "Tag", `{\\an7\\pos(${x},${y})\\p1\\1c${assColor(BRAND.black)}\\1a&H30&\\3c${YELLOW}\\bord${END_TAG.outline}\\shad0\\fad(150,0)}${pill(w, END_TAG.height)}{\\p0}`);
-    line(4, a, dur, "Tag", `{\\an5\\pos(${CENTER_X},${END_TAG.centerY})\\fad(150,0)}${END_TAG.text} {\\fscx150\\fscy150}${END_TAG.arrow}`);
+    const x = Math.round(spec.endTag.x - w / 2);
+    const box = endTagBox(spec.endTag);
+    const y = Math.round(box.centerY - box.height / 2);
+    line(3, a, dur, "Tag", `{\\an7\\pos(${x},${y})\\p1\\1c${assColor(BRAND.black)}\\1a&H30&\\3c${YELLOW}\\bord${END_TAG.outline}\\shad0\\fad(150,0)}${pill(w, box.height)}{\\p0}`);
+    line(4, a, dur, "Tag", `{\\an5\\pos(${spec.endTag.x},${box.centerY})\\fs${assFontSize(box.size, "montserrat")}\\fad(150,0)}${END_TAG.text} {\\fscx150\\fscy150}${END_TAG.arrow}`);
   }
 
   const fmt =
@@ -166,6 +168,85 @@ function imageFilter(input: number, frames: number, motion: RenderSpec["shots"][
   );
 }
 
+function checkSpec(spec: RenderSpec) {
+  if (!/^[a-z0-9-]{1,80}$/.test(spec.projectId)) throw new Error("Bad project id.");
+  if (!FILES.has(spec.file)) throw new Error("Bad output name.");
+  const dur = clipLength(spec);
+  if (spec.keep && !spec.keep.every((p) => p.end > p.start && p.start >= spec.start && p.end <= spec.end)) throw new Error("Bad cut list.");
+  if (!(dur > 1 && dur < 180)) throw new Error("A Short must be between 1 s and 3 min long.");
+  const hold = Math.min(20, Math.max(0, Number(spec.hold) || 0));
+  return { dur, hold, total: dur + hold };
+}
+
+/** Soft edge on each join where a deleted shot was taken out, so the cut doesn't click. */
+const JOIN_FADE = 0.012;
+/** Each kept stretch as [first frame, end frame), counted from the clip's start. Picture and sound cut on the same frames. */
+const keptFrames = (spec: RenderSpec) => spec.keep!.map((p) => [Math.round((p.start - spec.start) * FRAME.fps), Math.round((p.end - spec.start) * FRAME.fps)] as const);
+/** ffmpeg's -t for the long video: the whole clip, deleted stretches included (the graph cuts those out). */
+const inputSeconds = (spec: RenderSpec) => (spec.end - spec.start).toFixed(3);
+
+/** Sound with the deleted stretches taken out, ending in [kept]. */
+function cutAudio(source: string, spec: RenderSpec) {
+  const frames = keptFrames(spec);
+  const seconds = (f: number) => (f / FRAME.fps).toFixed(3);
+  return [
+    `${source},asplit=${frames.length}${frames.map((_, k) => `[s${k}]`).join("")}`,
+    ...frames.map(([a, b], k) => `[s${k}]atrim=start=${seconds(a)}:end=${seconds(b)},asetpts=PTS-STARTPTS,afade=t=in:d=${JOIN_FADE},afade=t=out:st=${((b - a) / FRAME.fps - JOIN_FADE).toFixed(3)}:d=${JOIN_FADE}[c${k}]`),
+    `${frames.map((_, k) => `[c${k}]`).join("")}concat=n=${frames.length}:v=0:a=1[kept]`,
+  ];
+}
+
+/** The sound of a Short, ending in [a]: the clip's own audio, then the spoken line at the voice's level, then the closing fade. */
+async function audioGraph(spec: RenderSpec, hasAudio: boolean, seek: string[], dur: number, total: number, addInput: (...args: string[]) => number) {
+  const audioIn = hasAudio ? "[0:a]" : `[${addInput("-f", "lavfi", "-t", inputSeconds(spec), "-i", "anullsrc=r=48000:cl=stereo")}:a]`;
+  const stereo = "aresample=48000,aformat=channel_layouts=stereo";
+  const source = `${audioIn}asetpts=PTS-STARTPTS,${stereo}`;
+  const cuts = spec.keep ? cutAudio(source, spec) : [];
+  const clipAudio = `${spec.keep ? "[kept]" : `${source},`}afade=t=in:st=0:d=${AUDIO_FADE.in},afade=t=out:st=${(dur - AUDIO_FADE.out).toFixed(3)}:d=${AUDIO_FADE.out},apad=whole_dur=${dur.toFixed(3)},atrim=0:${dur.toFixed(3)}`;
+  if (!spec.cta) return [...cuts, `${clipAudio},apad=whole_dur=${total.toFixed(3)}[a]`];
+  const [clipLevel, lineLevel] = await Promise.all([hasAudio ? loudness(seek) : null, loudness(["-i", spec.cta.audio!])]);
+  const gain = clipLevel !== null && lineLevel !== null ? Math.max(-10, Math.min(10, clipLevel - lineLevel)) : 0;
+  const line = addInput("-i", spec.cta.audio!);
+  return [
+    ...cuts,
+    `${clipAudio}[clip]`,
+    `[${line}:a]asetpts=PTS-STARTPTS,${stereo},volume=${gain.toFixed(2)}dB[line]`,
+    `[clip][line]concat=n=2:v=0:a=1,afade=t=out:st=${Math.max(0, total - AUDIO_FADE.end).toFixed(3)}:d=${AUDIO_FADE.end},apad=whole_dur=${total.toFixed(3)}[a]`,
+  ];
+}
+
+/** Only the sound of a Short, exactly as the final render will have it: what gets approved. */
+export async function renderShortVoice(spec: RenderSpec, onProgress: (p: number) => void): Promise<{ path: string; duration: number }> {
+  const { dur, total } = checkSpec(spec);
+  const info = await probe(spec.video);
+  if (spec.cta && !(await fs.stat(spec.cta.audio!).catch(() => null))?.isFile()) throw new Error("The call-to-action audio is missing. Try again.");
+  const dir = path.join(SHORTS_DIR, spec.projectId);
+  await ensureDir(dir);
+  const name = spec.file.replace(/\.mp4$/, "-voice.m4a");
+  const out = path.join(dir, name);
+  const tmp = path.join(dir, `.${name}.tmp.m4a`);
+
+  const seek = ["-ss", spec.start.toFixed(3), "-t", inputSeconds(spec), "-i", spec.video];
+  const inputs = [...seek];
+  let next = 1;
+  const addInput = (...args: string[]) => {
+    inputs.push(...args);
+    return next++;
+  };
+  const audio = await audioGraph(spec, !!info.audio, seek, dur, total, addInput);
+  try {
+    await runFfmpeg(["-y", ...inputs, "-filter_complex", audio.join(";"), "-map", "[a]", "-t", total.toFixed(3), "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", tmp], {
+      duration: total,
+      onProgress,
+    });
+    await fs.rename(tmp, out);
+  } catch (e) {
+    fs.unlink(tmp).catch(() => {});
+    throw e;
+  }
+  return { path: out, duration: total };
+}
+
 /**
  * One Short, 1080×1920 at 30 fps, H.264 + AAC. Shots with a vertical image are full-screen with a
  * slow zoom; the rest are the bottom of the source cropped off (old subtitles), a 4:5 centre crop
@@ -173,12 +254,7 @@ function imageFilter(input: number, frames: number, motion: RenderSpec["shots"][
  * sentence. Hook title, captions and end tag are burned in by libass.
  */
 export async function renderShort(spec: RenderSpec, onProgress: (p: number) => void): Promise<{ path: string; duration: number }> {
-  if (!/^[a-z0-9-]{1,80}$/.test(spec.projectId)) throw new Error("Bad project id.");
-  if (!FILES.has(spec.file)) throw new Error("Bad output name.");
-  const dur = spec.end - spec.start;
-  if (!(dur > 1 && dur < 180)) throw new Error("A Short must be between 1 s and 3 min long.");
-  const hold = Math.min(20, Math.max(0, Number(spec.hold) || 0));
-  const total = dur + hold;
+  const { dur, hold, total } = checkSpec(spec);
   const crop = Math.min(0.4, Math.max(0, spec.crop));
   const info = await probe(spec.video);
   if (!info.video) throw new Error("That file has no video stream.");
@@ -196,7 +272,7 @@ export async function renderShort(spec: RenderSpec, onProgress: (p: number) => v
   const tmp = path.join(dir, `.${spec.file}.tmp.mp4`);
 
   // ── Inputs: 0 is always the long video. ──
-  const seek = ["-ss", spec.start.toFixed(3), "-t", dur.toFixed(3), "-i", spec.video];
+  const seek = ["-ss", spec.start.toFixed(3), "-t", inputSeconds(spec), "-i", spec.video];
   const inputs = [...seek];
   let next = 1;
   const addInput = (...args: string[]) => {
@@ -224,11 +300,14 @@ export async function renderShort(spec: RenderSpec, onProgress: (p: number) => v
   const video: string[] = [];
   if (layoutPieces.length) {
     const keep = (1 - crop).toFixed(4);
-    const freeze = hold > 0 ? `,tpad=stop_mode=clone:stop_duration=${hold.toFixed(3)}` : "";
+    // Frame rounding at each cut can leave the joined clip a frame short, so a cut Short freezes a little longer.
+    const extra = hold + (spec.keep ? 0.2 : 0);
+    const freeze = extra > 0 ? `,tpad=stop_mode=clone:stop_duration=${extra.toFixed(3)}` : "";
+    const cut = spec.keep ? `,select='${keptFrames(spec).map(([a, b]) => `between(n,${a},${b - 1})`).join("+")}',setpts=N/${FRAME.fps}/TB` : "";
     const outs = layoutPieces.map((_, k) => `[lay${k}]`).join("");
     video.push(
       // Cut the old subtitles off the bottom first, so neither layer shows them; freeze the last frame under the call-to-action.
-      `[0:v]setpts=PTS-STARTPTS,fps=${FRAME.fps},setsar=1,crop=iw:trunc(ih*${keep}/2)*2:0:0${freeze},split=2[bgsrc][fgsrc]`,
+      `[0:v]setpts=PTS-STARTPTS,fps=${FRAME.fps}${cut},setsar=1,crop=iw:trunc(ih*${keep}/2)*2:0:0${freeze},split=2[bgsrc][fgsrc]`,
       // Blur a small copy (fast), scale it back up, darken it 40%.
       `[bgsrc]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,gblur=sigma=14,scale=${FRAME.w}:${FRAME.h},drawbox=x=0:y=0:w=iw:h=ih:color=black@0.4:t=fill[bg]`,
       // Main video: 4:5 centre crop, 1080×1350.
@@ -254,23 +333,7 @@ export async function renderShort(spec: RenderSpec, onProgress: (p: number) => v
   }
   video.push(`[${base}]ass=filename=${spec.projectId}/${assName}:fontsdir=fonts,setsar=1,format=yuv420p[v]`);
 
-  // ── Sound: the clip's own audio, then the spoken line at the voice's level, then the closing fade. ──
-  const audioIn = info.audio ? "[0:a]" : `[${addInput("-f", "lavfi", "-t", dur.toFixed(3), "-i", "anullsrc=r=48000:cl=stereo")}:a]`;
-  const stereo = "aresample=48000,aformat=channel_layouts=stereo";
-  const clipAudio = `${audioIn}asetpts=PTS-STARTPTS,${stereo},afade=t=in:st=0:d=${AUDIO_FADE.in},afade=t=out:st=${(dur - AUDIO_FADE.out).toFixed(3)}:d=${AUDIO_FADE.out},apad=whole_dur=${dur.toFixed(3)},atrim=0:${dur.toFixed(3)}`;
-  const audio: string[] = [];
-  if (spec.cta) {
-    const [clipLevel, lineLevel] = await Promise.all([info.audio ? loudness(seek) : null, loudness(["-i", spec.cta.audio!])]);
-    const gain = clipLevel !== null && lineLevel !== null ? Math.max(-10, Math.min(10, clipLevel - lineLevel)) : 0;
-    const line = addInput("-i", spec.cta.audio!);
-    audio.push(
-      `${clipAudio}[clip]`,
-      `[${line}:a]asetpts=PTS-STARTPTS,${stereo},volume=${gain.toFixed(2)}dB[line]`,
-      `[clip][line]concat=n=2:v=0:a=1,afade=t=out:st=${Math.max(0, total - AUDIO_FADE.end).toFixed(3)}:d=${AUDIO_FADE.end},apad=whole_dur=${total.toFixed(3)}[a]`,
-    );
-  } else {
-    audio.push(`${clipAudio},apad=whole_dur=${total.toFixed(3)}[a]`);
-  }
+  const audio = await audioGraph(spec, !!info.audio, seek, dur, total, addInput);
 
   try {
     await runFfmpeg(

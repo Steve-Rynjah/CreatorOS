@@ -49,15 +49,15 @@ export function scoreClip(sentences: Sentence[], from: number, to: number): { sc
   return { score: reasons.reduce((s, r) => s + r.points, 0), reasons: reasons.sort((a, b) => b.points - a.points) };
 }
 
-/** Every clip of usable, consecutive sentences within ±5 s of `target`. */
-export function candidates(sentences: Sentence[], target: number): Candidate[] {
+/** Every clip of usable, consecutive sentences within ±`slack` s of `target`. */
+export function candidates(sentences: Sentence[], target: number, slack: number = SLACK): Candidate[] {
   const out: Candidate[] = [];
   for (let i = 0; i < sentences.length; i++) {
     if (!usable(sentences[i])) continue;
     for (let j = i; j < sentences.length && usable(sentences[j]); j++) {
       const d = sentences[j].end - sentences[i].start;
-      if (d > target + SLACK) break;
-      if (d < target - SLACK) continue;
+      if (d > target + slack) break;
+      if (d < target - slack) continue;
       out.push({ from: i, to: j, start: sentences[i].start, end: sentences[j].end, ...scoreClip(sentences, i, j) });
     }
   }
@@ -119,6 +119,13 @@ export function samePart(sentences: Sentence[], a: { from: number }, b: { from: 
   return sentences[a.from].partKey === sentences[b.from].partKey;
 }
 
+type Span = { start: number; end: number };
+
+/** How much of the shorter span the two have in common (0..1). */
+function shared(a: Span, b: Span) {
+  return Math.max(0, Math.min(a.end, b.end) - Math.max(a.start, b.start)) / Math.min(a.end - a.start, b.end - b.start);
+}
+
 /**
  * The next best clips for one Short: same target length, clear of the other two
  * Shorts, and each one a different stretch of the video (not the same clip shifted
@@ -129,8 +136,6 @@ export function alternatives(sentences: Sentence[], shorts: ShortState[], n: 1 |
   const others = shorts.filter((s) => s.n !== n).map((s) => ({ start: sentences[s.from].start, end: sentences[s.to].end }));
   const pool = n === 1 ? hookCandidates(sentences, me.target) : candidates(sentences, me.target);
   const mine = { start: sentences[me.from].start, end: sentences[me.to].end };
-  const shared = (a: { start: number; end: number }, b: { start: number; end: number }) =>
-    Math.max(0, Math.min(a.end, b.end) - Math.max(a.start, b.start)) / Math.min(a.end - a.start, b.end - b.start);
   const out: Candidate[] = [];
   for (const c of pool) {
     if (c.from === me.from && c.to === me.to) continue;
@@ -141,4 +146,40 @@ export function alternatives(sentences: Sentence[], shorts: ShortState[], n: 1 |
     if (out.length >= count) break;
   }
   return out;
+}
+
+/** A part of the script as a source for regenerating one Short; `clip` is null when nothing there fits. */
+export type PartOption = { key: string; label: string; start: number; end: number; current: boolean; clip: Candidate | null };
+
+/** How far a clip may stray from its target length when a part has nothing closer. */
+const WIDE_SLACK = 10;
+
+/**
+ * For each part of the script, the best new clip for Short `n`: wholly inside that part, clear of
+ * the other two Shorts and different from the current clip. Clips already turned down come
+ * last, so regenerating keeps moving on until a part runs out.
+ */
+export function partOptions(sentences: Sentence[], shorts: ShortState[], n: 1 | 2 | 3): PartOption[] {
+  const me = shorts.find((s) => s.n === n)!;
+  const span = (s: { from: number; to: number }): Span => ({ start: sentences[s.from].start, end: sentences[s.to].end });
+  const others = shorts.filter((s) => s.n !== n).map(span);
+  const mine = span(me);
+  const tried = (me.rejected ?? []).map(span);
+  const pool = [...candidates(sentences, me.target), ...candidates(sentences, me.target, WIDE_SLACK)].filter(
+    (c) => !others.some((o) => overlaps(o, c)) && shared(c, mine) <= 0.5,
+  );
+  const keys = [...new Set(sentences.filter(usable).map((s) => s.partKey))];
+  return keys.map((key) => {
+    const list = sentences.filter((s) => s.partKey === key);
+    const fits = pool.filter((c) => sentences[c.from].partKey === key && sentences[c.to].partKey === key);
+    const { partTitle, partName } = list[0];
+    return {
+      key,
+      label: partName ? `${partTitle} – ${partName}` : partTitle,
+      start: list[0].start,
+      end: list[list.length - 1].end,
+      current: sentences[me.from].partKey === key,
+      clip: fits.find((c) => !tried.some((t) => shared(c, t) > 0.5)) ?? fits[0] ?? null,
+    };
+  });
 }

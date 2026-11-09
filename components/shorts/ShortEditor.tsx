@@ -3,14 +3,13 @@ import { useMemo, useState } from "react";
 import { Button, ProgressBar, Toggle } from "@/components/ui";
 import { CopyButton, fieldCls } from "@/components/publish/bits";
 import { Select } from "@/components/editor/Setup";
-import { fileUrl } from "@/lib/editor/render";
 import { measure } from "@/lib/shorts/draw";
 import {
   HOOK,
   buildSpec,
   captionText,
   chunkWords,
-  clipBounds,
+  clipSpan,
   specLength,
   clipWords,
   hookWords,
@@ -20,7 +19,7 @@ import {
   specHash,
 } from "@/lib/shorts/layout";
 import { alternatives, usable } from "@/lib/shorts/pick";
-import { assignedImages, groupSpans, shotGroups } from "@/lib/shorts/shots";
+import { assignedImages, clipGroups, groupSpans } from "@/lib/shorts/shots";
 import { SPEEDS, VOICES, type SpeedId, type VoiceId } from "@/lib/script";
 import type { Candidate, ShortState, ShortsProject } from "@/lib/shorts/types";
 import { ClipTimeline } from "./ClipTimeline";
@@ -47,6 +46,7 @@ export function ShortEditor({
   onClip,
   onChange,
   onRender,
+  onDownload,
   onCtaDone,
   onVoice,
 }: {
@@ -58,6 +58,8 @@ export function ShortEditor({
   onClip: (from: number, to: number, picked?: Candidate) => void;
   onChange: (patch: Partial<ShortState>) => void;
   onRender: () => void;
+  /** Saves the video, rendering it first if it has been edited. */
+  onDownload: () => void;
   /** The call-to-action was edited: speak it, so the preview and length are exact. */
   onCtaDone: () => void;
   onVoice: (patch: { voice?: VoiceId; rate?: SpeedId }) => void;
@@ -67,8 +69,9 @@ export function ShortEditor({
   const spec = useMemo(() => buildSpec(project, short, measure), [project, short, fontsReady]); // eslint-disable-line react-hooks/exhaustive-deps
   const hash = specHash(spec);
   const upToDate = !!short.rendered && short.rendered.hash === hash;
-  const { start, end } = clipBounds(sentences, short, project.video.duration);
-  const groups = useMemo(() => shotGroups(sentences, short.from, short.to, project.shotMeta), [sentences, short.from, short.to, project.shotMeta]);
+  const span = clipSpan(sentences, short, project.video.duration);
+  const { start, end } = span;
+  const groups = useMemo(() => clipGroups(sentences, short, project.shotMeta), [sentences, short, project.shotMeta]);
   const dur = specLength(spec);
   const others = project.shorts.filter((s) => s.n !== short.n).map((s) => ({ n: s.n, from: s.from, to: s.to }));
   const alts = useMemo(() => alternatives(sentences, project.shorts, short.n), [sentences, project.shorts, short.n]);
@@ -76,6 +79,7 @@ export function ShortEditor({
   const unusable = sentences.slice(short.from, short.to + 1).some((s) => !usable(s));
   const title = shortTitle(short, names);
   const description = shortDescription(project, short);
+  const sameTitle = project.shorts.find((s) => s.n !== short.n && shortTitle(s, names).toLowerCase() === title.toLowerCase());
   const hookList = hookWords(short.hook);
   const top = short.reasons.filter((r) => r.points > 0).slice(0, 3);
   const penalties = short.reasons.filter((r) => r.points < 0);
@@ -195,7 +199,6 @@ export function ShortEditor({
             <input
               className={fieldCls}
               value={short.hook}
-              disabled={!short.showHook}
               onChange={(e) => {
                 const hook = e.target.value;
                 const n = hook.trim().split(/\s+/).filter(Boolean).length;
@@ -223,7 +226,7 @@ export function ShortEditor({
 
           {/* Vertical images */}
           {!!short.images?.length && (
-            <ShotImages short={short} groups={groups} assigned={assignedImages(short, groups)} spans={groupSpans(sentences, groups, start, end - start)} onChange={onChange} />
+            <ShotImages short={short} groups={groups} assigned={assignedImages(short, groups)} spans={groupSpans(sentences, groups, span)} onChange={onChange} />
           )}
 
           {/* Spoken call-to-action */}
@@ -278,14 +281,13 @@ export function ShortEditor({
             <div className="flex items-center justify-between gap-2">
               <span className="text-xs font-medium text-muted">For the upload</span>
               {short.rendered && (
-                <a href={fileUrl(short.rendered.path, true)}>
-                  <Button size="sm" variant={upToDate ? "primary" : "secondary"}>
-                    Download {shortFileName(short.n)}
-                  </Button>
-                </a>
+                <Button size="sm" variant={upToDate ? "primary" : "secondary"} onClick={onDownload} disabled={!!render}>
+                  {upToDate ? "Download" : "Render & download"} {shortFileName(short.n)}
+                </Button>
               )}
             </div>
             <MetaLine label="Title" text={title} hint={`${title.length}/60`} />
+            {sameTitle && <p className="text-xs text-warning">Short {sameTitle.n} has this same title. Change the hook title above.</p>}
             <MetaLine label="Description" text={description} />
           </div>
         </div>

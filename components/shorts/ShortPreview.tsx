@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { fileUrl } from "@/lib/editor/render";
 import { drawShort, loadShortFonts } from "@/lib/shorts/draw";
 import { AUDIO_FADE, FRAME, SAFE, specLength } from "@/lib/shorts/layout";
+import { clipLength, skipCut, toShortTime, toVideoTime } from "@/lib/shorts/shots";
 import type { RenderSpec } from "@/lib/shorts/types";
 
 const clock = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
@@ -37,7 +38,7 @@ export function ShortPreview({ spec, rendered }: { spec: RenderSpec; rendered: s
     const ctx = c?.getContext("2d");
     if (!ctx || !v) return;
     const s = specRef.current;
-    const local = holdRef.current ?? Math.max(0, v.currentTime - s.start);
+    const local = holdRef.current ?? Math.max(0, toShortTime(s, v.currentTime));
     drawShort(ctx, s, local, v.readyState >= 2 ? v : null, imagesRef.current);
   }
 
@@ -58,7 +59,8 @@ export function ShortPreview({ spec, rendered }: { spec: RenderSpec; rendered: s
     loadShortFonts().then(draw);
   }, []);
 
-  // Jump to the clip's start whenever the clip moves.
+  // Jump to the clip's start whenever the clip moves or a shot is deleted.
+  const cutList = spec.keep?.map((p) => `${p.start}-${p.end}`).join() ?? "";
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
@@ -67,7 +69,7 @@ export function ShortPreview({ spec, rendered }: { spec: RenderSpec; rendered: s
     setT(0);
     holdRef.current = null;
     if (v.readyState >= 1) v.currentTime = spec.start;
-  }, [spec.start, spec.end, spec.video]);
+  }, [spec.start, spec.end, spec.video, cutList]);
 
   // Playback loop: draw every frame, fade the audio like the render, hold the last frame, stop at the end.
   useEffect(() => {
@@ -90,12 +92,15 @@ export function ShortPreview({ spec, rendered }: { spec: RenderSpec; rendered: s
       const v = videoRef.current;
       const s = specRef.current;
       if (!v) return;
-      const d = s.end - s.start;
+      const d = clipLength(s);
       let local: number;
       if (holdRef.current !== null) {
         local = d + (now - holdFrom) / 1000;
       } else {
-        local = v.currentTime - s.start;
+        // Hop over deleted shots.
+        const jump = skipCut(s, v.currentTime);
+        if (jump !== null) v.currentTime = jump;
+        local = toShortTime(s, v.currentTime);
         if (local >= d || v.ended) {
           // The clip is over: hold the last picture under the call-to-action.
           v.pause();
@@ -142,10 +147,10 @@ export function ShortPreview({ spec, rendered }: { spec: RenderSpec; rendered: s
   function seek(local: number) {
     const v = videoRef.current;
     if (!v) return;
-    const clip = spec.end - spec.start;
+    const clip = clipLength(spec);
     // Past the clip's end is the frozen last frame.
     holdRef.current = local > clip ? local : null;
-    v.currentTime = spec.start + Math.min(local, clip - 0.04);
+    v.currentTime = toVideoTime(spec, Math.min(local, clip - 0.04));
     setT(local);
     draw();
   }

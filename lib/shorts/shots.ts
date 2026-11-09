@@ -1,5 +1,5 @@
 import type { ParsedScript } from "@/lib/script";
-import type { ImageMotion, Sentence, ShortState, ShotMeta } from "./types";
+import type { ClipSpan, ImageMotion, Sentence, ShortState, ShotMeta } from "./types";
 
 /**
  * Which script shots a Short uses, and which vertical image goes on each.
@@ -54,12 +54,23 @@ function continuesGroup(group: number[], prev: ShotMeta | undefined, cur: ShotMe
   return similarity(prev.visual, cur.visual) >= NEAR_IDENTICAL;
 }
 
+/** The shots deleted from a Short; none if deleting them would leave its clip empty (the clip can be moved afterwards). */
+export function cutShots(sentences: Sentence[], short: Pick<ShortState, "from" | "to" | "removedShots">) {
+  const gone = new Set(short.removedShots);
+  return sentences.slice(short.from, short.to + 1).some((s) => !gone.has(s.shot)) ? gone : new Set<number>();
+}
+
 /** The image groups of sentences [from..to], in order. Without script details every shot is its own image. */
-export function shotGroups(sentences: Sentence[], from: number, to: number, meta: Record<number, ShotMeta> = {}): ShotGroup[] {
+export function shotGroups(sentences: Sentence[], from: number, to: number, meta: Record<number, ShotMeta> = {}, gone = new Set<number>()): ShotGroup[] {
   const groups: ShotGroup[] = [];
   let last: number | null = null;
   for (let i = from; i <= to; i++) {
     const n = sentences[i].shot;
+    if (gone.has(n)) {
+      // The shots on either side of a deleted one are never folded into one image.
+      last = null;
+      continue;
+    }
     if (n === last) continue;
     const group = groups[groups.length - 1];
     if (group && last !== null && continuesGroup(group.shots, meta[last], meta[n])) group.shots.push(n);
@@ -67,6 +78,11 @@ export function shotGroups(sentences: Sentence[], from: number, to: number, meta
     last = n;
   }
   return groups;
+}
+
+/** The image groups a Short still has, once its deleted shots are gone. */
+export function clipGroups(sentences: Sentence[], short: Pick<ShortState, "from" | "to" | "removedShots">, meta?: Record<number, ShotMeta>) {
+  return shotGroups(sentences, short.from, short.to, meta, cutShots(sentences, short));
 }
 
 const pad = (n: number) => String(n).padStart(3, "0");
@@ -87,11 +103,46 @@ export function assignedImages(short: Pick<ShortState, "images" | "mapping">, gr
   return groups.map((_, i) => short.images?.[i]?.path ?? null);
 }
 
+const pieces = (span: ClipSpan) => span.keep ?? [span];
+
+/** Seconds of the long video a Short plays, before the call-to-action. */
+export const clipLength = (span: ClipSpan) => pieces(span).reduce((sum, p) => sum + p.end - p.start, 0);
+
+/** A time in the long video as seconds into the Short. */
+export function toShortTime(span: ClipSpan, t: number) {
+  const list = pieces(span);
+  let at = 0;
+  for (let k = 0; k + 1 < list.length; k++) {
+    if (t < list[k + 1].start) return at + Math.min(t, list[k].end) - list[k].start;
+    at += list[k].end - list[k].start;
+  }
+  return at + t - list[list.length - 1].start;
+}
+
+/** Seconds into the Short as a time in the long video. */
+export function toVideoTime(span: ClipSpan, local: number) {
+  const list = pieces(span);
+  let left = local;
+  for (let k = 0; k + 1 < list.length; k++) {
+    const length = list[k].end - list[k].start;
+    if (left < length) return list[k].start + left;
+    left -= length;
+  }
+  return list[list.length - 1].start + left;
+}
+
+/** If `t` is inside a deleted stretch, where playback should jump to. */
+export function skipCut(span: ClipSpan, t: number) {
+  const next = span.keep?.find((p) => t < p.end);
+  return next && t < next.start ? next.start : null;
+}
+
 /**
  * Seconds from the Short's start that each group is on screen: from when its first sentence
  * starts to when the next group's does. The first opens the clip; the last closes it.
  */
-export function groupSpans(sentences: Sentence[], groups: ShotGroup[], clipStart: number, clipLength: number) {
-  const starts = groups.map((g, i) => (i === 0 ? 0 : Math.min(clipLength, Math.max(0, sentences[g.sentence].start - clipStart))));
-  return groups.map((_, i) => ({ from: starts[i], to: i + 1 < groups.length ? starts[i + 1] : clipLength }));
+export function groupSpans(sentences: Sentence[], groups: ShotGroup[], span: ClipSpan) {
+  const length = clipLength(span);
+  const starts = groups.map((g, i) => (i === 0 ? 0 : Math.min(length, Math.max(0, toShortTime(span, sentences[g.sentence].start)))));
+  return groups.map((_, i) => ({ from: starts[i], to: i + 1 < groups.length ? starts[i + 1] : length }));
 }

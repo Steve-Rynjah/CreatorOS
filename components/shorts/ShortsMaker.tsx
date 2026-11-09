@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Button, ProgressBar, pollJob } from "@/components/ui";
 import { CheckBadge, LAST_KEY, PdfCard, cardCls } from "@/components/editor/Setup";
-import { CopyButton, Section, Steps, fieldCls } from "@/components/publish/bits";
+import { Section, Steps, fieldCls } from "@/components/publish/bits";
 import { fileUrl } from "@/lib/editor/render";
 import { alignToSpeech } from "@/lib/merge/captions";
 import { listSavedScripts } from "@/lib/publish/kit";
@@ -13,8 +13,11 @@ import { loadShortFonts, measure } from "@/lib/shorts/draw";
 import {
   CTA_DEFAULT,
   DEFAULT_CROP,
+  END_TAG,
   buildSpec,
   chooseHook,
+  distinctHooks,
+  endTagMaxSize,
   keyWord,
   mainSubject,
   properNouns,
@@ -23,16 +26,22 @@ import {
   shortTitle,
   specHash,
   specLength,
+  voiceKey,
 } from "@/lib/shorts/layout";
 import { SAME_PART, TARGETS, hookCandidates, isQuestion, pickShorts, samePart, scoreClip } from "@/lib/shorts/pick";
 import { scriptSentences } from "@/lib/shorts/sentences";
-import { reusedShots, shotGroups, shotListLine, shotMeta } from "@/lib/shorts/shots";
+import { cutShots, shotMeta } from "@/lib/shorts/shots";
 import { deleteShortsProject, loadShortsProjects, saveShortsProject, shortsId } from "@/lib/shorts/store";
-import type { Candidate, Sentence, ShortImage, ShortState, ShortsProject, TimedWord, TimingSource } from "@/lib/shorts/types";
-import { ImageFolderBox, type ImageFolder } from "./ImageFolderBox";
+import type { Candidate, Sentence, ShortImage, ShortState, ShortsProject, ShortsStage, TimedWord, TimingSource } from "@/lib/shorts/types";
+import type { ImageFolder } from "./ImageFolderBox";
+import { ImagesStage } from "./ImagesStage";
+import { ReviewStage } from "./ReviewStage";
 import { SHORT_LABEL, ShortEditor } from "./ShortEditor";
 
-const STEP_LABELS = ["Reading script", "Matching timings", "Picking clips", "Rendering Short 1", "Rendering Short 2", "Rendering Short 3"] as const;
+const STEP_LABELS = ["Reading script", "Matching timings", "Picking clips", "Voice of Short 1", "Voice of Short 2", "Voice of Short 3"] as const;
+const STAGE_LABELS = ["Upload", "Review the voices", "Add images", "Final Shorts"] as const;
+const STAGE_INDEX = { review: 1, images: 2, final: 3 } as const;
+const STAGE_NOTE = { review: "Waiting for approval", images: "Waiting for images" } as const;
 const TIMING_LABEL: Record<TimingSource, string> = { home: "Home edit timings", whisper: "Local Whisper", pauses: "Voice pauses" };
 const TINTS = { 1: "bg-[#FFD23F]", 2: "bg-sky-400", 3: "bg-emerald-400" } as const;
 const tick = () => new Promise((r) => setTimeout(r, 200));
@@ -67,10 +76,12 @@ function videoVoice(scriptFile: string): { voice: VoiceId; rate: SpeedId } {
   return { voice: VOICES.find((v) => v.label === label)?.id ?? voice ?? DEFAULT_VOICE, rate };
 }
 
+/** The default ending before it was reworded: saved projects still on it get the new one. */
+const OLD_CTA_DEFAULT = "So what happened next? Watch the full story on my channel.";
 const SHORT_NUMBERS = [1, 2, 3] as const;
 const NO_FOLDER: ImageFolder = { dir: "" };
 
-function newShort(sentences: Sentence[], c: Candidate, n: 1 | 2 | 3, folder?: ImageFolder): ShortState {
+function newShort(sentences: Sentence[], c: Candidate, n: 1 | 2 | 3): ShortState {
   const { hook, sentence } = chooseHook(sentences, c.from, c.to, n);
   return {
     n,
@@ -82,12 +93,11 @@ function newShort(sentences: Sentence[], c: Candidate, n: 1 | 2 | 3, folder?: Im
     hook,
     hookKey: keyWord(hook),
     hookSentence: sentence,
-    showHook: true,
+    showHook: false,
     showEndTag: true,
     crop: DEFAULT_CROP,
     edits: {},
-    imagesDir: folder?.images ? folder.dir : undefined,
-    images: folder?.images ?? [],
+    images: [],
     cta: CTA_DEFAULT,
     rendered: null,
   };
@@ -99,17 +109,18 @@ function newShort(sentences: Sentence[], c: Candidate, n: 1 | 2 | 3, folder?: Im
  */
 function upgradeHook(sentences: Sentence[], shorts: ShortState[]): ShortState[] {
   const next = shorts.map((s) => {
-    if (s.n !== 1) return s;
+    // A Short 1 regenerated at review came from a part the user chose: it stays there.
+    if (s.n !== 1 || s.rejected?.length) return s;
     let clip = { from: s.from, to: s.to };
     if (!isQuestion(sentences[s.to])) {
       const best = hookCandidates(sentences, s.target)[0];
       if (best && isQuestion(sentences[best.to])) clip = { from: best.from, to: best.to };
     }
     if (s.hookEdited) return { ...s, ...clip };
-    const { hook, sentence } = chooseHook(sentences, clip.from, clip.to, 1);
+    const { hook, sentence } = chooseHook(sentences, clip.from, clip.to, 1, cutShots(sentences, { ...s, ...clip }));
     return { ...s, ...clip, hook, hookKey: keyWord(hook), hookSentence: sentence };
   });
-  return rescore(sentences, next);
+  return distinctHooks(sentences, rescore(sentences, next));
 }
 
 /** Scores follow the clips; Short 3 loses 2 points when it shares a part with Short 2. */
@@ -142,6 +153,12 @@ export function ShortsMaker() {
   const [error, setError] = useState<string | null>(null);
   const [notes, setNotes] = useState<string[]>([]);
   const [zipping, setZipping] = useState(false);
+  const scroller = useRef<HTMLDivElement>(null);
+  const stage = project ? (project.stage ?? "final") : null;
+
+  useEffect(() => {
+    scroller.current?.scrollTo({ top: 0 });
+  }, [stage]);
 
   useEffect(() => {
     /* eslint-disable-next-line react-hooks/set-state-in-effect -- read localStorage after hydration */
@@ -168,6 +185,15 @@ export function ShortsMaker() {
   function patchShortImages(n: 1 | 2 | 3, dir: string | undefined, images: ShortImage[]) {
     // A different folder starts this Short's mapping over; the same folder only refreshes its list.
     setProject((p) => (p ? { ...p, shorts: p.shorts.map((s) => (s.n === n ? { ...s, imagesDir: dir, images, mapping: s.imagesDir === dir ? s.mapping : undefined } : s)) } : p));
+  }
+
+  function setStage(next: ShortsStage) {
+    projectRef.current = projectRef.current && { ...projectRef.current, stage: next };
+    setProject((p) => (p ? { ...p, stage: next } : p));
+  }
+
+  function folderCopying(n: 1 | 2 | 3, copying: boolean) {
+    setFolders((f) => ({ ...f, [n]: { ...(f[n] ?? NO_FOLDER), copying } }));
   }
 
   function folderScanned(n: 1 | 2 | 3, dir: string, result: { images: ShortImage[] } | { error: string }) {
@@ -284,6 +310,7 @@ export function ShortsMaker() {
     if (!script || !video) return;
     setError(null);
     setNotes([]);
+    setFolders({});
     setBusy(true);
     try {
       setStep(0);
@@ -304,6 +331,7 @@ export function ShortsMaker() {
         id: shortsId(title),
         title,
         savedAt: now(),
+        stage: "review",
         video,
         scriptFile: script.file,
         timing: timed.timing,
@@ -311,7 +339,7 @@ export function ShortsMaker() {
         speechSnapped: snapped.ok,
         subject: mainSubject(timed.sentences, script.title),
         sentences: timed.sentences,
-        shorts: picks.map((c, k) => newShort(timed.sentences, c, (k + 1) as 1 | 2 | 3, folders[(k + 1) as 1 | 2 | 3])),
+        shorts: distinctHooks(timed.sentences, picks.map((c, k) => newShort(timed.sentences, c, (k + 1) as 1 | 2 | 3))),
         shotMeta: shotMeta(script),
         ...videoVoice(script.file),
       };
@@ -322,11 +350,83 @@ export function ShortsMaker() {
       setNotes(pickNotes);
 
       await loadShortFonts();
-      for (const n of [1, 2, 3] as const) {
+      for (const n of SHORT_NUMBERS) {
         setStep(2 + n);
-        await renderOne(n);
+        await renderOne(n, true);
       }
-      setStep(STEP_LABELS.length);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setStep(-1);
+      setBusy(false);
+    }
+  }
+
+  // ───────────── Review ─────────────
+
+  /** Builds any voice preview that is missing or no longer matches its clip. */
+  async function refreshVoices() {
+    setError(null);
+    setBusy(true);
+    try {
+      await loadShortFonts();
+      for (const n of SHORT_NUMBERS) {
+        const p = projectRef.current!;
+        const s = p.shorts.find((x) => x.n === n)!;
+        if (s.voicePreview?.key !== voiceKey(buildSpec(p, s, measure))) await renderOne(n, true);
+      }
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Swaps a Short for a new clip from the chosen part and prepares its voice. */
+  async function regenerate(n: 1 | 2 | 3, c: Candidate) {
+    const p = projectRef.current;
+    const old = p?.shorts.find((s) => s.n === n);
+    if (!p || !old) return;
+    const { hook, sentence } = chooseHook(p.sentences, c.from, c.to, n);
+    const fresh: ShortState = {
+      ...old,
+      from: c.from,
+      to: c.to,
+      hook,
+      hookKey: keyWord(hook),
+      hookEdited: false,
+      hookSentence: sentence,
+      edits: {},
+      mapping: undefined,
+      removedShots: undefined,
+      voicePreview: null,
+      rendered: null,
+      rejected: [...(old.rejected ?? []), { from: old.from, to: old.to }],
+    };
+    const next = { ...p, shorts: distinctHooks(p.sentences, rescore(p.sentences, p.shorts.map((s) => (s.n === n ? fresh : s)))) };
+    projectRef.current = next;
+    setProject(next);
+    setError(null);
+    try {
+      await renderOne(n, true);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  function backToReview() {
+    setStage("review");
+    refreshVoices();
+  }
+
+  // ───────────── Final videos ─────────────
+
+  async function generateFinal() {
+    setError(null);
+    setBusy(true);
+    try {
+      for (const n of stale) await renderOne(n);
+      setStage("final");
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -347,10 +447,26 @@ export function ShortsMaker() {
         if (s.n !== n) return s;
         const next = { ...s, from, to };
         if (s.hookEdited) return next;
-        const { hook, sentence } = chooseHook(p.sentences, from, to, s.n);
+        const { hook, sentence } = chooseHook(p.sentences, from, to, s.n, cutShots(p.sentences, next));
         return { ...next, hook, hookKey: keyWord(hook), hookSentence: sentence };
       });
-      return { ...p, shorts: rescore(p.sentences, shorts) };
+      return { ...p, shorts: distinctHooks(p.sentences, rescore(p.sentences, shorts)) };
+    });
+  }
+
+  /** Sets which shots are deleted from a Short. A hook title taken from a deleted line is chosen again. */
+  function setRemovedShots(n: 1 | 2 | 3, shots: number[]) {
+    setProject((p) => {
+      if (!p) return p;
+      const updated = p.shorts.map((s) => {
+        if (s.n !== n) return s;
+        const next = { ...s, removedShots: shots.length ? shots : undefined };
+        const gone = cutShots(p.sentences, next);
+        if (s.hookEdited || s.hookSentence === null || !gone.has(p.sentences[s.hookSentence].shot)) return next;
+        const { hook, sentence } = chooseHook(p.sentences, s.from, s.to, s.n, gone);
+        return { ...next, hook, hookKey: keyWord(hook), hookSentence: sentence };
+      });
+      return { ...p, shorts: distinctHooks(p.sentences, updated) };
     });
   }
 
@@ -378,8 +494,8 @@ export function ShortsMaker() {
     }
   }
 
-  /** Renders one Short from the latest edits; the others are left alone. */
-  async function renderOne(n: 1 | 2 | 3) {
+  /** Renders one Short from the latest edits (or only its voice); the others are left alone. */
+  async function renderOne(n: 1 | 2 | 3, voiceOnly = false) {
     try {
       await speakCta(n);
     } catch (e) {
@@ -389,27 +505,26 @@ export function ShortsMaker() {
     const short = p?.shorts.find((s) => s.n === n);
     if (!p || !short) return;
     const spec = buildSpec(p, short, measure);
-    const hash = specHash(spec);
     setRenders((r) => ({ ...r, [n]: { progress: 0 } }));
     try {
-      const r = await fetch("/api/shorts/render", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(spec) });
+      const r = await fetch(`/api/shorts/render${voiceOnly ? "?voice=1" : ""}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(spec) });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error);
       const done = await pollJob<{ path: string }>(j.jobId, (u) => setRenders((x) => ({ ...x, [n]: { progress: u.progress } })));
-      const rendered = { path: done.path, hash, at: now() };
-      projectRef.current = { ...projectRef.current!, shorts: projectRef.current!.shorts.map((s) => (s.n === n ? { ...s, rendered } : s)) };
-      patchShort(n, { rendered });
+      const result: Partial<ShortState> = voiceOnly ? { voicePreview: { path: done.path, key: voiceKey(spec) } } : { rendered: { path: done.path, hash: specHash(spec), at: now() } };
+      projectRef.current = { ...projectRef.current!, shorts: projectRef.current!.shorts.map((s) => (s.n === n ? { ...s, ...result } : s)) };
+      patchShort(n, result);
     } catch (e) {
-      throw new Error(`Short ${n} didn't render: ${(e as Error).message.split("\n")[0]}`);
+      throw new Error(`Short ${n}'s ${voiceOnly ? "voice preview" : "video"} didn't render: ${(e as Error).message.split("\n")[0]}`);
     } finally {
       setRenders(({ [n]: _, ...rest }) => rest); // eslint-disable-line @typescript-eslint/no-unused-vars
     }
   }
 
-  async function renderSingle(n: 1 | 2 | 3) {
+  async function renderSingle(n: 1 | 2 | 3, voiceOnly = false) {
     setError(null);
     try {
-      await renderOne(n);
+      await renderOne(n, voiceOnly);
     } catch (e) {
       setError((e as Error).message);
     }
@@ -438,7 +553,7 @@ export function ShortsMaker() {
     setVideo(p.video);
     setScript(null);
     // Renders live in a temp folder; drop the ones that are gone.
-    const paths = [p.video.path, ...p.shorts.flatMap((s) => (s.rendered ? [s.rendered.path] : []))];
+    const paths = [p.video.path, ...p.shorts.flatMap((s) => [s.rendered?.path, s.voicePreview?.path].filter((x): x is string => !!x))];
     const r = await fetch("/api/merge/probe", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ paths }) })
       .then((x) => x.json())
       .catch(() => null);
@@ -453,15 +568,21 @@ export function ShortsMaker() {
     }
     const shorts = upgradeHook(
       sentences,
-      p.shorts.map((s) => ({ ...(s.rendered && missing.has(s.rendered.path) ? { ...s, rendered: null } : s), cta: s.cta ?? CTA_DEFAULT })),
+      p.shorts.map((s) => ({
+        ...s,
+        rendered: s.rendered && missing.has(s.rendered.path) ? null : s.rendered,
+        voicePreview: s.voicePreview && missing.has(s.voicePreview.path) ? null : s.voicePreview,
+        cta: s.cta === undefined || s.cta === OLD_CTA_DEFAULT ? CTA_DEFAULT : s.cta,
+      })),
     );
     const next = { ...p, ...(p.voice ? {} : videoVoice(p.scriptFile)), sentences, speechSnapped, shorts };
-    // Each Short's images reload from its own folder, in case they changed on disk.
+    // Each Short's images reload from its own folder when its box is next shown, in case they changed on disk.
     setFolders(Object.fromEntries(shorts.map((s) => [s.n, { dir: s.imagesDir ?? "" }])));
     projectRef.current = next;
     setProject(next);
-    if (missing.has(p.video.path)) setError("The long video has moved or was deleted. Add it again and click Make Shorts to rebuild.");
-    window.scrollTo?.({ top: 0 });
+    if (missing.has(p.video.path)) setError("The long video has moved or was deleted. Click New, then add it again to rebuild.");
+    else if (next.stage === "review") refreshVoices();
+    scroller.current?.scrollTo({ top: 0 });
   }
 
   function newProject() {
@@ -471,7 +592,6 @@ export function ShortsMaker() {
     setScript(null);
     setVideo(null);
     setFolders({});
-    setStep(-1);
     setNotes([]);
     setError(null);
   }
@@ -484,14 +604,31 @@ export function ShortsMaker() {
 
   // ───────────── Export ─────────────
 
+  /** Saves one Short, rendering it first if it was edited, so the file always matches what's on screen. */
+  async function downloadShort(n: 1 | 2 | 3) {
+    setError(null);
+    try {
+      if (stale.includes(n)) await renderOne(n);
+      const path = projectRef.current?.shorts.find((s) => s.n === n)?.rendered?.path;
+      if (!path) return;
+      const link = document.createElement("a");
+      link.href = fileUrl(path, true);
+      link.download = shortFileName(n);
+      link.click();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
   async function downloadAll() {
     if (!project) return;
     setZipping(true);
     setError(null);
     try {
+      for (const n of stale) await renderOne(n);
       const files: { name: string; data: Blob | string }[] = [];
       const text: string[] = [];
-      for (const s of project.shorts) {
+      for (const s of projectRef.current!.shorts) {
         if (!s.rendered) continue;
         const r = await fetch(fileUrl(s.rendered.path));
         if (!r.ok) throw new Error(`${shortFileName(s.n)} is missing. Render it again.`);
@@ -510,9 +647,10 @@ export function ShortsMaker() {
   const canMake = !!script && !!video && !busy && !reading && !copying;
   const allRendered = !!project && project.shorts.every((s) => s.rendered);
   const anyRendering = Object.keys(renders).length > 0;
+  const showInputs = !stage || stage === "final";
 
   return (
-    <div className="h-full overflow-auto">
+    <div ref={scroller} className="h-full overflow-auto">
       <div className="max-w-6xl mx-auto px-6 py-12 space-y-8 animate-rise">
         <header className="flex flex-wrap items-end justify-between gap-4">
           <div>
@@ -526,7 +664,7 @@ export function ShortsMaker() {
             <h1 className="mt-4 text-4xl font-bold tracking-tight">
               One video. <span className="text-[#FFD23F]">Three Shorts.</span>
             </h1>
-            <p className="text-muted mt-2">Drop in the final video and its polished script. You get three vertical Shorts of about 35, 45 and 30 s, free and on your own computer.</p>
+            <p className="text-muted mt-2">Drop in the final video and its polished script. Listen to three Shorts of about 35, 45 and 30 s, approve them, then add images. Free and on your own computer.</p>
           </div>
           {project && (
             <div className="flex items-center gap-2 text-xs text-muted tabular-nums">
@@ -537,6 +675,8 @@ export function ShortsMaker() {
           )}
         </header>
 
+        <Steps step={stage ? STAGE_INDEX[stage] : 0} labels={STAGE_LABELS} className="grid-cols-2 sm:grid-cols-4" />
+
         {saved.length > 0 && (
           <Section title="Saved Shorts projects" aside={project && <Button size="sm" onClick={newProject}>New</Button>}>
             <ul className="flex flex-col divide-y divide-line-strong/40">
@@ -545,7 +685,7 @@ export function ShortsMaker() {
                   <div className="min-w-0 flex-1">
                     <div className={`text-sm font-medium truncate ${p.id === project?.id ? "text-link" : ""}`}>{p.title}</div>
                     <div className="text-xs text-muted">
-                      {new Date(p.savedAt).toLocaleString()} · {p.shorts.filter((s) => s.rendered).length}/3 rendered · {TIMING_LABEL[p.timing]}
+                      {new Date(p.savedAt).toLocaleString()} · {p.stage && p.stage !== "final" ? STAGE_NOTE[p.stage] : `${p.shorts.filter((s) => s.rendered).length}/3 rendered`} · {TIMING_LABEL[p.timing]}
                     </div>
                   </div>
                   <Button size="sm" onClick={() => openProject(p)} disabled={p.id === project?.id || busy}>
@@ -561,54 +701,41 @@ export function ShortsMaker() {
         )}
 
         {/* Inputs */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <VideoCard video={video} copying={copying} onPick={pickVideo} onFile={uploadVideo} onClear={() => setVideo(null)} disabled={busy} />
-          <PdfCard
-            file={script?.file ?? null}
-            meta={script ? `${script.parts.length} parts · ${script.parts.reduce((s, p) => s + p.shots.length, 0)} shots${script.title ? ` · “${script.title}”` : ""}` : "The polished script the video was made from"}
-            reading={reading}
-            onFile={readPdf}
-            onClear={() => setScript(null)}
-          />
-        </div>
-
-        <div className="space-y-2.5">
-          <h2 className="text-sm font-semibold">
-            Vertical images <span className="font-normal text-muted">(optional, one folder per Short)</span>
-          </h2>
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-            {SHORT_NUMBERS.map((n) => (
-              <ImageFolderBox
-                key={n}
-                n={n}
-                folder={folders[n] ?? NO_FOLDER}
-                onDir={(dir) => setFolders((f) => ({ ...f, [n]: { dir } }))}
-                onScanned={(dir, result) => folderScanned(n, dir, result)}
-                onClear={() => clearFolder(n)}
+        {showInputs && (
+          <>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <VideoCard video={video} copying={copying} onPick={pickVideo} onFile={uploadVideo} onClear={() => setVideo(null)} disabled={busy} />
+              <PdfCard
+                file={script?.file ?? null}
+                meta={script ? `${script.parts.length} parts · ${script.parts.reduce((s, p) => s + p.shots.length, 0)} shots${script.title ? ` · “${script.title}”` : ""}` : "The polished script the video was made from"}
+                reading={reading}
+                onFile={readPdf}
+                onClear={() => setScript(null)}
               />
-            ))}
-          </div>
-        </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-4">
+              <Button variant="primary" size="lg" className="rounded-xl" disabled={!canMake} onClick={makeShorts}>
+                {busy ? "Preparing…" : project ? "Prepare Shorts again" : "Prepare Shorts"}
+                {!busy && (
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                    <path d="M5 12h14m-5-5l5 5-5 5" />
+                  </svg>
+                )}
+              </Button>
+              {!canMake && !busy && (
+                <span className="text-xs text-muted">
+                  {!video ? "Add the final video." : !script ? (project ? "Add the script PDF again to rebuild from scratch. Edits below still work." : "Add the polished script PDF.") : ""}
+                </span>
+              )}
+              {project && project.id && !busy && (
+                <span className="text-xs text-subtle">Rebuilding replaces the picks and edits of “{project.title}”.</span>
+              )}
+            </div>
+          </>
+        )}
 
         <div className="space-y-4">
-          <div className="flex flex-wrap items-center gap-4">
-            <Button variant="primary" size="lg" className="rounded-xl" disabled={!canMake} onClick={makeShorts}>
-              {busy ? "Making Shorts…" : project ? "Make Shorts again" : "Make Shorts"}
-              {!busy && (
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                  <path d="M5 12h14m-5-5l5 5-5 5" />
-                </svg>
-              )}
-            </Button>
-            {!canMake && !busy && (
-              <span className="text-xs text-muted">
-                {!video ? "Add the final video." : !script ? (project ? "Add the script PDF again to rebuild from scratch. Edits below still work." : "Add the polished script PDF.") : ""}
-              </span>
-            )}
-            {project && project.id && !busy && (
-              <span className="text-xs text-subtle">Rebuilding replaces the picks and edits of “{project.title}”.</span>
-            )}
-          </div>
           {step >= 0 && <Steps step={step} labels={STEP_LABELS} className="grid-cols-2 sm:grid-cols-3 lg:grid-cols-6" />}
           {job && (
             <div className="space-y-1.5">
@@ -629,10 +756,40 @@ export function ShortsMaker() {
           </Alert>
         ))}
 
-        {project && (
+        {project && stage === "review" && (
           <>
             <Overview project={project} />
-            <ShotList project={project} />
+            <ReviewStage
+              project={project}
+              renders={renders}
+              working={busy || anyRendering}
+              onApprove={() => setStage("images")}
+              onRegenerate={regenerate}
+              onRetry={(n) => renderSingle(n, true)}
+            />
+          </>
+        )}
+
+        {project && stage === "images" && (
+          <ImagesStage
+            project={project}
+            folders={folders}
+            renders={renders}
+            working={busy || anyRendering}
+            onBack={backToReview}
+            onGenerate={generateFinal}
+            onDir={(n, dir) => setFolders((f) => ({ ...f, [n]: { dir } }))}
+            onScanned={folderScanned}
+            onClear={clearFolder}
+            onCopying={folderCopying}
+            onRemovedShots={setRemovedShots}
+          />
+        )}
+
+        {project && stage === "final" && (
+          <>
+            <Overview project={project} />
+            <EndTagSetting project={project} onChange={(endTag) => setProject((p) => (p ? { ...p, endTag } : p))} />
 
             {project.shorts.map((s) => (
               <ShortEditor
@@ -645,6 +802,7 @@ export function ShortsMaker() {
                 onClip={(from, to) => setClip(s.n, from, to)}
                 onChange={(patch) => patchShort(s.n, patch)}
                 onRender={() => renderSingle(s.n)}
+                onDownload={() => downloadShort(s.n)}
                 onCtaDone={() => speakEdited(s.n)}
                 onVoice={(patch) => setProject((p) => (p ? { ...p, ...patch } : p))}
               />
@@ -658,6 +816,9 @@ export function ShortsMaker() {
                   <p className="text-xs text-muted mt-0.5">1080×1920 · 30 fps · H.264 + AAC · saved as “{project.title}”</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
+                  <Button onClick={() => setStage("images")} disabled={anyRendering || busy}>
+                    Change images
+                  </Button>
                   <Button onClick={renderChanged} disabled={!stale.length || anyRendering || busy}>
                     {stale.length ? `Render changed (${stale.map((n) => `Short ${n}`).join(", ")})` : "All up to date"}
                   </Button>
@@ -665,7 +826,7 @@ export function ShortsMaker() {
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                       <path d="M12 4v11m0 0l-4-4m4 4l4-4M5 19h14" />
                     </svg>
-                    {zipping ? "Packing…" : "Download all (.zip)"}
+                    {zipping ? "Packing…" : stale.length ? "Render & download all (.zip)" : "Download all (.zip)"}
                   </Button>
                 </div>
               </div>
@@ -679,9 +840,9 @@ export function ShortsMaker() {
                       </div>
                     </div>
                     {s.rendered ? (
-                      <a href={fileUrl(s.rendered.path, true)}>
-                        <Button size="sm">Download</Button>
-                      </a>
+                      <Button size="sm" onClick={() => downloadShort(s.n)} disabled={anyRendering || busy || zipping}>
+                        {stale.includes(s.n) ? "Render & download" : "Download"}
+                      </Button>
                     ) : (
                       <span className="text-[11px] text-muted">Not rendered</span>
                     )}
@@ -700,36 +861,6 @@ export function ShortsMaker() {
         )}
       </div>
     </div>
-  );
-}
-
-/** Which shots need a vertical image, Short by Short, ready to copy. */
-function ShotList({ project }: { project: ShortsProject }) {
-  const lines = project.shorts.map((s) => {
-    const groups = shotGroups(project.sentences, s.from, s.to, project.shotMeta);
-    return { n: s.n, count: groups.length, text: shotListLine(s.n, groups), reused: reusedShots(groups) };
-  });
-  return (
-    <section className="rounded-2xl border border-line-strong/60 bg-raised/60 p-5 space-y-3">
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="text-sm font-semibold">Shots to make vertical</h2>
-        <CopyButton text={lines.map((l) => l.text).join("\n")} label="Copy all" />
-      </div>
-      <ul className="space-y-2">
-        {lines.map((l) => (
-          <li key={l.n} className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <p className="text-sm tabular-nums break-words">{l.text}</p>
-              <p className="text-[11px] text-muted">
-                {l.count} image{l.count === 1 ? "" : "s"}
-                {l.reused.length ? ` · ${l.reused.join(", ")}` : ""}
-              </p>
-            </div>
-            <CopyButton text={l.text} />
-          </li>
-        ))}
-      </ul>
-    </section>
   );
 }
 
@@ -774,6 +905,44 @@ function Overview({ project }: { project: ShortsProject }) {
             </a>
           );
         })}
+      </div>
+    </section>
+  );
+}
+
+/** The look of the "Watch the full story" tag: one setting, used by all three Shorts. */
+function EndTagSetting({ project, onChange }: { project: ShortsProject; onChange: (endTag: ShortsProject["endTag"]) => void }) {
+  const max = endTagMaxSize(measure);
+  const size = Math.min(project.endTag?.size ?? END_TAG.size, max);
+  const gap = project.endTag?.gap ?? END_TAG.gap;
+  return (
+    <section className="rounded-2xl border border-line-strong/60 bg-raised/60 p-5 space-y-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold">“Watch the full story” tag</h2>
+          <p className="text-xs text-muted mt-0.5">Applies to all three Shorts. Drag a preview to its end to see the tag.</p>
+        </div>
+        {project.endTag && (
+          <Button size="sm" onClick={() => onChange(undefined)}>
+            Reset
+          </Button>
+        )}
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <label className="block">
+          <span className="flex justify-between text-xs font-medium text-muted mb-1.5">
+            <span>Text size</span>
+            <span className="tabular-nums text-fg">{Math.round((size / END_TAG.size) * 100)}%</span>
+          </span>
+          <input type="range" min={END_TAG.size} max={max} step={1} value={size} onChange={(e) => onChange({ size: +e.target.value, gap })} className="w-full" />
+        </label>
+        <label className="block">
+          <span className="flex justify-between text-xs font-medium text-muted mb-1.5">
+            <span>Gap from the bottom</span>
+            <span className="tabular-nums text-fg">{gap} px</span>
+          </span>
+          <input type="range" min={END_TAG.gap} max={END_TAG.maxGap} step={1} value={gap} onChange={(e) => onChange({ size, gap: +e.target.value })} className="w-full" />
+        </label>
       </div>
     </section>
   );

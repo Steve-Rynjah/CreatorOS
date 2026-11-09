@@ -1,6 +1,6 @@
 "use client";
 import { shortsAnton, shortsMontserrat } from "@/lib/fonts";
-import { BRAND, CAPTION, CENTER_X, END_TAG, FRAME, GRADIENT, HOOK, VIDEO, baselineFor, imageScale, specLength, type Measure } from "./layout";
+import { BRAND, CAPTION, CENTER_X, END_TAG, FRAME, GRADIENT, HOOK, VIDEO, baselineFor, endTagBox, imageScale, specLength, type Measure } from "./layout";
 import type { RenderSpec } from "./types";
 
 /**
@@ -157,9 +157,9 @@ export function drawShort(
   if (spec.endTag && t >= spec.endTag.at && t < specLength(spec)) {
     ctx.globalAlpha = Math.min(1, (t - spec.endTag.at) / 0.15);
     const w = spec.endTag.width;
-    const h = END_TAG.height;
-    const x = CENTER_X - w / 2;
-    const y = END_TAG.centerY - h / 2;
+    const { size, height: h, centerY } = endTagBox(spec.endTag);
+    const x = spec.endTag.x - w / 2;
+    const y = centerY - h / 2;
     ctx.beginPath();
     ctx.roundRect(x, y, w, h, h / 2);
     ctx.fillStyle = "rgba(27,27,27,0.81)";
@@ -169,17 +169,17 @@ export function drawShort(
     ctx.lineWidth = END_TAG.outline;
     ctx.strokeStyle = BRAND.yellow;
     ctx.stroke();
-    ctx.font = fontCss("montserrat", END_TAG.size);
+    ctx.font = fontCss("montserrat", size);
     const text = `${END_TAG.text} `;
     const tw = ctx.measureText(text).width;
-    ctx.font = fontCss("montserrat", END_TAG.size * 1.5);
+    ctx.font = fontCss("montserrat", size * 1.5);
     const aw = ctx.measureText(END_TAG.arrow).width;
-    const bx = CENTER_X - (tw + aw) / 2;
-    const by = baselineFor(END_TAG.centerY, END_TAG.size, "montserrat");
+    const bx = spec.endTag.x - (tw + aw) / 2;
+    const by = baselineFor(centerY, size, "montserrat");
     ctx.fillStyle = BRAND.white;
-    ctx.font = fontCss("montserrat", END_TAG.size);
+    ctx.font = fontCss("montserrat", size);
     ctx.fillText(text, bx, by);
-    ctx.font = fontCss("montserrat", END_TAG.size * 1.5);
+    ctx.font = fontCss("montserrat", size * 1.5);
     ctx.fillText(END_TAG.arrow, bx + tw, by);
     ctx.globalAlpha = 1;
   }

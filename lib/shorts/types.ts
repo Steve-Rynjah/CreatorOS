@@ -81,16 +81,27 @@ export type ShortState = {
   images?: ShortImage[];
   /** Set once images are dragged by hand: first shot of a group → image path (null: no image). */
   mapping?: Record<number, string | null>;
+  /** Script shots deleted from this Short: their picture, voice and captions are cut out. */
+  removedShots?: number[];
   /** Spoken after the clip's last sentence; empty means no spoken ending and no end tag. */
   cta: string;
   ctaAudio?: CtaAudio | null;
+  /** The voice alone (clip + call-to-action), for approving before any video is rendered. */
+  voicePreview?: { path: string; key: string } | null;
+  /** Clips turned down at review, so regenerating moves on to new ones. */
+  rejected?: { from: number; to: number }[];
   rendered?: { path: string; hash: string; at: number } | null;
 };
+
+/** review: listen and approve. images: add the vertical images. final: edit and export. */
+export type ShortsStage = "review" | "images" | "final";
 
 export type ShortsProject = {
   id: string;
   title: string;
   savedAt: number;
+  /** Missing on projects saved before the review step: they open as "final". */
+  stage?: ShortsStage;
   video: { path: string; name: string; duration: number };
   scriptFile: string;
   timing: TimingSource;
@@ -102,10 +113,15 @@ export type ShortsProject = {
   shorts: ShortState[];
   /** Script VISUAL and MOTION per shot number; projects saved earlier get it when the PDF is added. */
   shotMeta?: Record<number, ShotMeta>;
+  /** Text size and gap from the bottom of the "Watch the full story" tag, for all three Shorts; missing means the defaults. */
+  endTag?: { size: number; gap: number };
   /** Voice and speed of the call-to-action: those of the long video. */
   voice?: VoiceId;
   rate?: SpeedId;
 };
+
+/** Where a Short sits in the long video. `keep` lists the stretches played when shots were deleted from the middle. */
+export type ClipSpan = { start: number; end: number; keep?: { start: number; end: number }[] };
 
 /** What the browser sends to be rendered. All positions are on the 1080×1920 frame. */
 export type RenderSpec = {
@@ -114,7 +130,9 @@ export type RenderSpec = {
   file: string;
   start: number;
   end: number;
-  /** Seconds after `end`: the spoken call-to-action, over the last image. */
+  /** The stretches of start..end that are played, when shots were deleted; absent means all of it. */
+  keep?: ClipSpan["keep"];
+  /** Seconds after the clip: the spoken call-to-action, over the last image. */
   hold: number;
   crop: number;
   hook: { size: number; lines: { text: string; key: boolean }[][] } | null;
@@ -123,6 +141,6 @@ export type RenderSpec = {
   shots: { from: number; to: number; image: string; motion: ImageMotion }[];
   /** `audio` is null until the line has been generated. */
   cta: { audio: string | null } | null;
-  /** `at`: seconds from the Short's start when the tag appears; it stays to the end. */
-  endTag: { width: number; at: number } | null;
+  /** `at`: seconds from the Short's start when the tag appears; it stays to the end. `x`: the pill's centre. */
+  endTag: { width: number; at: number; x: number; size?: number; gap?: number } | null;
 };
